@@ -64,7 +64,7 @@ const pollBlockSize = 4 * 1024
 // Network poller descriptor.
 //
 // No heap pointers.
-//
+// 被重复利用
 //go:notinheap
 type pollDesc struct {
 	link *pollDesc // in pollcache, protected by pollcache.lock
@@ -111,15 +111,18 @@ var (
 )
 
 //go:linkname poll_runtime_pollServerInit internal/poll.runtime_pollServerInit
+// 网络IO和文件IO创建网络轮询器
 func poll_runtime_pollServerInit() {
 	netpollGenericInit()
 }
 
+// 添加计时器的时候创建网络轮询器
 func netpollGenericInit() {
 	if atomic.Load(&netpollInited) == 0 {
 		lockInit(&netpollInitLock, lockRankNetpollInit)
 		lock(&netpollInitLock)
 		if netpollInited == 0 {
+			// 调用各个平台的实现
 			netpollinit()
 			atomic.Store(&netpollInited, 1)
 		}

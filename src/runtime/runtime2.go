@@ -410,27 +410,27 @@ type g struct {
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
 	stack       stack   // offset known to runtime/cgo
-	stackguard0 uintptr // offset known to liblink
+	stackguard0 uintptr // offset known to liblink 调度器抢占式调度
 	stackguard1 uintptr // offset known to liblink
 
-	_panic       *_panic // innermost panic - offset known to liblink
-	_defer       *_defer // innermost defer
-	m            *m      // current m; offset known to arm liblink
-	sched        gobuf
+	_panic       *_panic        // innermost panic - offset known to liblink
+	_defer       *_defer        // innermost defer
+	m            *m             // current m; offset known to arm liblink
+	sched        gobuf          // 恢复上下文
 	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
 	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
 	stktopsp     uintptr        // expected sp at top of stack, to check in traceback
 	param        unsafe.Pointer // passed parameter on wakeup
-	atomicstatus uint32
-	stackLock    uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
+	atomicstatus uint32         // 当前 goroutine 状态
+	stackLock    uint32         // sigprof/scang lock; TODO: fold in to atomicstatus
 	goid         int64
 	schedlink    guintptr
 	waitsince    int64      // approx time when the g become blocked
 	waitreason   waitReason // if status==Gwaiting
 
-	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt
-	preemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule
-	preemptShrink bool // shrink stack at synchronous safe point
+	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt 抢占信号
+	preemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule 抢占时将状态改成 _Gpreempted
+	preemptShrink bool // shrink stack at synchronous safe point 在同步安全点收缩栈
 
 	// asyncSafePoint is set if g is stopped at an asynchronous
 	// safe point. This means there are frames on the stack
@@ -455,7 +455,7 @@ type g struct {
 	sysexitticks   int64    // cputicks when syscall has returned (for tracing)
 	traceseq       uint64   // trace event sequencer
 	tracelastp     puintptr // last P emitted an event for this goroutine
-	lockedm        muintptr
+	lockedm        muintptr // G被锁定只在这个m上运行
 	sig            uint32
 	writebuf       []byte
 	sigcode0       uintptr
@@ -616,7 +616,7 @@ type p struct {
 	sudogcache []*sudog
 	sudogbuf   [128]*sudog
 
-	// Cache of mspan objects from the heap.
+	// Cache of mspan objects from the heap. 内存单元
 	mspancache struct {
 		// We need an explicit length here because this field is used
 		// in allocation codepaths where write barriers are not allowed,
@@ -690,10 +690,12 @@ type p struct {
 	// Actions to take at some time. This is used to implement the
 	// standard library's time package.
 	// Must hold timersLock to access.
+	// 4 叉堆，保存计时器，由网络轮询器以及调度器触发
 	timers []*timer
 
 	// Number of timers in P's heap.
 	// Modified using atomic instructions.
+	// P 中计时器数量
 	numTimers uint32
 
 	// Number of timerModifiedEarlier timers on P's heap.

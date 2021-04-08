@@ -29,6 +29,7 @@ var (
 	netpollWakeSig uint32 // used to avoid duplicate calls of netpollBreak
 )
 
+// 初始化网络轮询器
 func netpollinit() {
 	epfd = epollcreate1(_EPOLL_CLOEXEC)
 	if epfd < 0 {
@@ -39,6 +40,7 @@ func netpollinit() {
 		}
 		closeonexec(epfd)
 	}
+	// 用于中断等待中的 epollwait，往管道里面写入的时候，会触发 r 事件
 	r, w, errno := nonblockingPipe()
 	if errno != 0 {
 		println("runtime: pipe failed with", -errno)
@@ -57,10 +59,12 @@ func netpollinit() {
 	netpollBreakWr = uintptr(w)
 }
 
+// 判断文件描述符是否被轮询器使用
 func netpollIsPollDescriptor(fd uintptr) bool {
 	return fd == uintptr(epfd) || fd == netpollBreakRd || fd == netpollBreakWr
 }
 
+// 监听fd上的边缘触发条件，创建事件并加入监听
 func netpollopen(fd uintptr, pd *pollDesc) int32 {
 	var ev epollevent
 	ev.events = _EPOLLIN | _EPOLLOUT | _EPOLLRDHUP | _EPOLLET
@@ -78,6 +82,7 @@ func netpollarm(pd *pollDesc, mode int) {
 }
 
 // netpollBreak interrupts an epollwait.
+// 添加定时器的时候触发 中断 epollwait
 func netpollBreak() {
 	if atomic.Cas(&netpollWakeSig, 0, 1) {
 		for {
@@ -142,7 +147,7 @@ retry:
 		if ev.events == 0 {
 			continue
 		}
-
+		// 添加定时器的时候，中断网络轮询器
 		if *(**uintptr)(unsafe.Pointer(&ev.data)) == &netpollBreakRd {
 			if ev.events != _EPOLLIN {
 				println("runtime: netpoll: break fd ready for", ev.events)
@@ -172,6 +177,7 @@ retry:
 			if ev.events == _EPOLLERR {
 				pd.everr = true
 			}
+			// 处理正常的读写事件
 			netpollready(&toRun, pd, mode)
 		}
 	}

@@ -25,14 +25,15 @@ type timer struct {
 	// a well-behaved function and not block.
 	when   int64
 	period int64
-	f      func(interface{}, uintptr)
-	arg    interface{}
+	f      func(interface{}, uintptr) // 计时器到时间时调用的函数
+	arg    interface{}                // 函数里面的入参
 	seq    uintptr
 
 	// What to set the when field to in timerModifiedXX status.
 	nextwhen int64
 
 	// The status field holds one of the values below.
+	// 计时器状态
 	status uint32
 }
 
@@ -120,6 +121,7 @@ const (
 
 	// Waiting for timer to fire.
 	// The timer is in some P's heap.
+	// 等待触发
 	timerWaiting
 
 	// Running the timer function.
@@ -128,28 +130,34 @@ const (
 
 	// The timer is deleted and should be removed.
 	// It should not be run, but it is still in some P's heap.
+	// 被删除
 	timerDeleted
 
 	// The timer is being removed.
 	// The timer will only have this status briefly.
+	// 正在被删除
 	timerRemoving
 
 	// The timer has been stopped.
 	// It is not in any P's heap.
+	// 已经被停止并从推中删除
 	timerRemoved
 
 	// The timer is being modified.
 	// The timer will only have this status briefly.
+	// 正在被修改
 	timerModifying
 
 	// The timer has been modified to an earlier time.
 	// The new when value is in the nextwhen field.
 	// The timer is in some P's heap, possibly in the wrong place.
+	// 被修改到了更早的时间
 	timerModifiedEarlier
 
 	// The timer has been modified to the same or a later time.
 	// The new when value is in the nextwhen field.
 	// The timer is in some P's heap, possibly in the wrong place.
+	// 被修改到了更晚的时间
 	timerModifiedLater
 
 	// The timer has been modified and is being moved.
@@ -260,6 +268,7 @@ func addtimer(t *timer) {
 	doaddtimer(pp, t)
 	unlock(&pp.timersLock)
 
+	// 唤醒网络轮询器中的线程
 	wakeNetPoller(when)
 }
 
@@ -268,6 +277,7 @@ func addtimer(t *timer) {
 func doaddtimer(pp *p, t *timer) {
 	// Timers rely on the network poller, so make sure the poller
 	// has started.
+	// 初始化网络轮询器
 	if netpollInited == 0 {
 		netpollGenericInit()
 	}
@@ -289,6 +299,7 @@ func doaddtimer(pp *p, t *timer) {
 // actually remove it from the timers heap. We can only mark it as deleted.
 // It will be removed in due course by the P whose heap it is on.
 // Reports whether the timer was removed before it was run.
+// 将计时器标记成待删除
 func deltimer(t *timer) bool {
 	for {
 		switch s := atomic.Load(&t.status); s {
@@ -640,6 +651,7 @@ func moveTimers(pp *p, timers []*timer) {
 // the correct place in the heap. While looking for those timers,
 // it also moves timers that have been modified to run later,
 // and removes deleted timers. The caller must have locked the timers for pp.
+// 调整计时器堆，移动计时器、删除计时器
 func adjusttimers(pp *p, now int64) {
 	if atomic.Load(&pp.adjustTimers) == 0 {
 		if verifyTimers {

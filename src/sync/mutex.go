@@ -34,9 +34,9 @@ type Locker interface {
 }
 
 const (
-	mutexLocked = 1 << iota // mutex is locked
-	mutexWoken
-	mutexStarving
+	mutexLocked      = 1 << iota // mutex is locked
+	mutexWoken                   // 表示从正常模式被从唤醒
+	mutexStarving                // 当前的互斥锁进入饥饿状态
 	mutexWaiterShift = iota
 
 	// Mutex fairness.

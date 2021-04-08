@@ -1231,6 +1231,7 @@ func mstart1() {
 
 	// Install signal handlers; after minit so that minit can
 	// prepare the thread to be able to handle the signals.
+	// m0 是主线程，每个m 都有一个 g0，系统堆栈
 	if _g_.m == &m0 {
 		mstartm0()
 	}
@@ -1239,10 +1240,12 @@ func mstart1() {
 		fn()
 	}
 
+	// 将m与p绑定
 	if _g_.m != &m0 {
 		acquirep(_g_.m.nextp.ptr())
 		_g_.m.nextp = 0
 	}
+	// 调度程序
 	schedule()
 }
 
@@ -2975,6 +2978,7 @@ func injectglist(glist *gList) {
 // One round of scheduler: find a runnable goroutine and execute it.
 // Never returns.
 func schedule() {
+	// 获取 g0
 	_g_ := getg()
 
 	if _g_.m.locks != 0 {
@@ -2996,6 +3000,7 @@ top:
 	pp := _g_.m.p.ptr()
 	pp.preempt = false
 
+	// gc STW 停止 m
 	if sched.gcwaiting != 0 {
 		gcstopm()
 		goto top
@@ -3011,6 +3016,7 @@ top:
 		throw("schedule: spinning with local work")
 	}
 
+	// 检查调度器
 	checkTimers(pp, 0)
 
 	var gp *g

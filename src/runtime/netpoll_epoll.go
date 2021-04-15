@@ -40,7 +40,7 @@ func netpollinit() {
 		}
 		closeonexec(epfd)
 	}
-	// 用于中断等待中的 epollwait，往管道里面写入的时候，会触发 r 事件
+	// 用于中断等待中的 netpoll，往管道里面写入的时候，会触发 r 事件(添加计时器的时候，会写入)
 	r, w, errno := nonblockingPipe()
 	if errno != 0 {
 		println("runtime: pipe failed with", -errno)

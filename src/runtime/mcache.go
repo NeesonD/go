@@ -35,8 +35,11 @@ type mcache struct {
 	//
 	// tinyAllocs is the number of tiny allocations performed
 	// by the P that owns this mcache.
-	tiny       uintptr
+	// 申请小对象的起始地址
+	tiny uintptr
+	// 起始地址的偏移量
 	tinyoffset uintptr
+	// tiny对象分配数量
 	tinyAllocs uintptr
 
 	// The rest is not accessed on every malloc.
@@ -90,6 +93,7 @@ func allocmcache() *mcache {
 		unlock(&mheap_.lock)
 	})
 	for i := range c.alloc {
+		// 初始化保存的是空的 span
 		c.alloc[i] = &emptymspan
 	}
 	c.nextSample = nextSample()
@@ -159,6 +163,7 @@ func (c *mcache) refill(spc spanClass) {
 	}
 
 	// Get a new cached span from the central lists.
+	// 从中心缓存申请新的 mspan
 	s = mheap_.central[spc].mcentral.cacheSpan()
 	if s == nil {
 		throw("out of memory")

@@ -290,6 +290,7 @@ type heapArena struct {
 	// address-ordered first-fit policy.
 	//
 	// Read atomically and written with an atomic CAS.
+	// 基地址
 	zeroedBase uintptr
 }
 
@@ -385,7 +386,7 @@ type mspan struct {
 	list *mSpanList // For debugging. TODO: Remove.
 
 	startAddr uintptr // address of first byte of span aka s.base()
-	npages    uintptr // number of pages in span
+	npages    uintptr // number of pages in span 包含的页数
 
 	manualFreeList gclinkptr // list of free objects in mSpanManual spans
 
@@ -404,6 +405,7 @@ type mspan struct {
 	// undefined and should never be referenced.
 	//
 	// Object n starts at address n*elemsize + (start << pageShift).
+	// 扫描页中空闲对象的初始索引
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
@@ -415,6 +417,7 @@ type mspan struct {
 	// ctz (count trailing zero) to use it directly.
 	// allocCache may contain bits beyond s.nelems; the caller must ignore
 	// these.
+	// 通过位图找到空闲位置
 	allocCache uint64
 
 	// allocBits and gcmarkBits hold pointers to a span's mark and
@@ -454,7 +457,7 @@ type mspan struct {
 	divMul      uint16        // for divide by elemsize - divMagic.mul
 	baseMask    uint16        // if non-0, elemsize is a power of 2, & this will get object allocation base
 	allocCount  uint16        // number of allocated objects
-	spanclass   spanClass     // size class and noscan (uint8)
+	spanclass   spanClass     // size class and noscan (uint8) 跨度类，决定了 span 中的存储的对象大小和个数
 	state       mSpanStateBox // mSpanInUse etc; accessed atomically (get/set methods)
 	needzero    uint8         // needs to be zeroed before allocation
 	divShift    uint8         // for divide by elemsize - divMagic.shift
@@ -896,6 +899,7 @@ func (s spanAllocType) manual() bool {
 // spanclass indicates the span's size class and scannability.
 //
 // If needzero is true, the memory for the returned span will be zeroed.
+// 从系统栈中获取新的 mspan
 func (h *mheap) alloc(npages uintptr, spanclass spanClass, needzero bool) *mspan {
 	// Don't do any operations that lock the heap on the G stack.
 	// It might trigger stack growth, and the stack growth code needs
@@ -905,6 +909,7 @@ func (h *mheap) alloc(npages uintptr, spanclass spanClass, needzero bool) *mspan
 		// To prevent excessive heap growth, before allocating n pages
 		// we need to sweep and reclaim at least n pages.
 		if h.sweepdone == 0 {
+			// 回收一部分内存
 			h.reclaim(npages)
 		}
 		s = h.allocSpan(npages, spanAllocHeap, spanclass)
@@ -1134,6 +1139,7 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 	// If the allocation is small enough, try the page cache!
 	// The page cache does not support aligned allocations, so we cannot use
 	// it if we need to provide a physical page aligned stack allocation.
+	// 如果需要的 page 小于 16 页，则通过 pagecache 分配
 	pp := gp.m.p.ptr()
 	if !needPhysPageAlign && pp != nil && npages < pageCachePages/4 {
 		c := &pp.pcache
@@ -1146,6 +1152,7 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 		}
 
 		// Try to allocate from the cache.
+		// 可能分配成功，也可能因为 pagecache 不够用，导致分配失败，则需要通过 pageAlloc 来分配
 		base, scav = c.alloc(npages)
 		if base != 0 {
 			s = h.tryAllocMSpan()
@@ -1168,12 +1175,15 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 
 	if base == 0 {
 		// Try to acquire a base address.
+		// 通过 pageAlloc 来分配
 		base, scav = h.pages.alloc(npages)
 		if base == 0 {
+			// 如果不够分配，则先扩容
 			if !h.grow(npages) {
 				unlock(&h.lock)
 				return nil
 			}
+			// 再分配
 			base, scav = h.pages.alloc(npages)
 			if base == 0 {
 				throw("grew heap, but no adequate free space found")
@@ -1183,6 +1193,7 @@ func (h *mheap) allocSpan(npages uintptr, typ spanAllocType, spanclass spanClass
 	if s == nil {
 		// We failed to get an mspan earlier, so grab
 		// one now that we have the heap lock.
+		// 分配一个 mspan 对象
 		s = h.allocMSpanLocked()
 	}
 
@@ -1343,6 +1354,7 @@ func (h *mheap) grow(npage uintptr) bool {
 		// Not enough room in the current arena. Allocate more
 		// arena space. This may not be contiguous with the
 		// current arena, so we have to request the full ask.
+		// 申请虚拟内存
 		av, asize := h.sysAlloc(ask)
 		if av == nil {
 			print("runtime: out of memory: cannot allocate ", ask, "-byte block (", memstats.heap_sys, " in use)\n")
@@ -1399,6 +1411,7 @@ func (h *mheap) grow(npage uintptr) bool {
 		if overage := uintptr(retained + uint64(totalGrowth) - h.scavengeGoal); todo > overage {
 			todo = overage
 		}
+		// 回收不再使用的空闲内存页
 		h.pages.scavenge(todo, false)
 	}
 	return true

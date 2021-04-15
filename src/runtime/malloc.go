@@ -652,6 +652,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 			// Outside addressable heap. Can't use.
 			v = nil
 		} else {
+			// 从操作系统中申请内存
 			v = sysReserve(unsafe.Pointer(p), n)
 		}
 		if p == uintptr(v) {
@@ -726,10 +727,12 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
 	}
 
 	// Transition from Reserved to Prepared.
+	// 将内存状态变为 Prepared
 	sysMap(v, size, &memstats.heap_sys)
 
 mapped:
 	// Create arena metadata.
+	// 初始化 heapArena 来管理内存
 	for ri := arenaIndex(uintptr(v)); ri <= arenaIndex(uintptr(v)+size-1); ri++ {
 		l2 := h.arenas[ri.l1()]
 		if l2 == nil {
@@ -771,6 +774,7 @@ mapped:
 			// double the array each time, this can lead
 			// to at most 2x waste.
 		}
+		// 将创建的 heapArena 放到 arenas 中
 		h.allArenas = h.allArenas[:len(h.allArenas)+1]
 		h.allArenas[len(h.allArenas)-1] = ri
 
@@ -879,17 +883,18 @@ func (c *mcache) nextFree(spc spanClass) (v gclinkptr, s *mspan, shouldhelpgc bo
 			println("runtime: s.allocCount=", s.allocCount, "s.nelems=", s.nelems)
 			throw("s.allocCount != s.nelems && freeIndex == s.nelems")
 		}
+		// 从 mcentral 中获取可用的 span，并替换掉当前 mcache 中的 span
 		c.refill(spc)
 		shouldhelpgc = true
 		s = c.alloc[spc]
-
+		// 再次到新的 span 中获取 index
 		freeIndex = s.nextFreeIndex()
 	}
 
 	if freeIndex >= s.nelems {
 		throw("freeIndex is not valid")
 	}
-
+	// 计算出来内存地址，并更新 span 的属性
 	v = gclinkptr(freeIndex*s.elemsize + s.base())
 	s.allocCount++
 	if uintptr(s.allocCount) > s.nelems {
@@ -974,12 +979,14 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	shouldhelpgc := false
 	dataSize := size
+	// 获取 mcache，用于微对象和小对象的分配
 	c := getMCache()
 	if c == nil {
 		throw("mallocgc called without a P or outside bootstrapping")
 	}
 	var span *mspan
 	var x unsafe.Pointer
+	// true 代表对象中没有指针
 	noscan := typ == nil || typ.ptrdata == 0
 	if size <= maxSmallSize {
 		if noscan && size < maxTinySize {
@@ -1045,6 +1052,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 				v, span, shouldhelpgc = c.nextFree(tinySpanClass)
 			}
 			x = unsafe.Pointer(v)
+			// 将申请的内存快全置位0
 			(*[2]uint64)(x)[0] = 0
 			(*[2]uint64)(x)[1] = 0
 			// See if we need to replace the existing tiny block with the new one
@@ -1066,6 +1074,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			span = c.alloc[spc]
 			v := nextFreeFast(span)
 			if v == 0 {
+				// mcache 不够用，则从 mcentral 中申请
 				v, span, shouldhelpgc = c.nextFree(spc)
 			}
 			x = unsafe.Pointer(v)

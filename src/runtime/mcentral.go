@@ -106,16 +106,19 @@ func (c *mcentral) cacheSpan() *mspan {
 	var s *mspan
 
 	// Try partial swept spans first.
+	// 从清理过的、包含空间的 spanSet 结构中查找可以使用的内存管理单元
 	if s = c.partialSwept(sg).pop(); s != nil {
 		goto havespan
 	}
 
 	// Now try partial unswept spans.
 	for ; spanBudget >= 0; spanBudget-- {
+		// 从未被清理过的、有空闲对象的的 spanSet 查找可以使用的内存管理单元
 		s = c.partialUnswept(sg).pop()
 		if s == nil {
 			break
 		}
+		// 当找到需要回收的内存单元时，执行 sweep 进行清理
 		if atomic.Load(&s.sweepgen) == sg-2 && atomic.Cas(&s.sweepgen, sg-2, sg-1) {
 			// We got ownership of the span, so let's sweep it and use it.
 			s.sweep(true)
@@ -131,6 +134,7 @@ func (c *mcentral) cacheSpan() *mspan {
 	// Now try full unswept spans, sweeping them and putting them into the
 	// right list if we fail to get a span.
 	for ; spanBudget >= 0; spanBudget-- {
+		// 从未被清理过的、没有空闲对象的的 spanSet 查找可以使用的内存管理单元
 		s = c.fullUnswept(sg).pop()
 		if s == nil {
 			break
@@ -155,6 +159,7 @@ func (c *mcentral) cacheSpan() *mspan {
 	}
 
 	// We failed to get a span from the mcentral so get one from mheap.
+	// 从堆中申请新的内存管理单元
 	s = c.grow()
 	if s == nil {
 		return nil
@@ -226,9 +231,10 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 
 // grow allocates a new empty span from the heap and initializes it for c's size class.
 func (c *mcentral) grow() *mspan {
+	// 获取待分配的页数
 	npages := uintptr(class_to_allocnpages[c.spanclass.sizeclass()])
 	size := uintptr(class_to_size[c.spanclass.sizeclass()])
-
+	// 获取新的 span
 	s := mheap_.alloc(npages, c.spanclass, true)
 	if s == nil {
 		return nil

@@ -61,6 +61,7 @@ func (f *fixalloc) init(size uintptr, first func(arg, p unsafe.Pointer), arg uns
 	f.zero = true
 }
 
+// 获取下一个空闲的内存空间
 func (f *fixalloc) alloc() unsafe.Pointer {
 	if f.size == 0 {
 		print("runtime: use of FixAlloc_Alloc before FixAlloc_Init\n")
@@ -91,6 +92,7 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 	return v
 }
 
+// 释放指针指向的内存空间
 func (f *fixalloc) free(p unsafe.Pointer) {
 	f.inuse -= f.size
 	v := (*mlink)(p)

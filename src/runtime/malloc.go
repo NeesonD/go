@@ -1128,6 +1128,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 	// All slots hold nil so no scanning is needed.
 	// This may be racing with GC so do it atomically if there can be
 	// a race marking the bit.
+	// gc 过程中新对象全部标记成黑色
 	if gcphase != _GCoff {
 		gcmarknewobject(span, uintptr(x), size, scanSize)
 	}

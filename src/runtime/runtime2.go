@@ -323,11 +323,11 @@ type gobuf struct {
 	// and restores it doesn't need write barriers. It's still
 	// typed as a pointer so that any other writes from Go get
 	// write barriers.
-	sp   uintptr
-	pc   uintptr
-	g    guintptr
+	sp   uintptr  // 栈指针
+	pc   uintptr  // 程序技术器
+	g    guintptr // gobuf 对应的 goroutine
 	ctxt unsafe.Pointer
-	ret  sys.Uintreg
+	ret  sys.Uintreg // 系统调用的返回值
 	lr   uintptr
 	bp   uintptr // for framepointer-enabled architectures
 }
@@ -493,7 +493,7 @@ type m struct {
 	gsignal       *g           // signal-handling g
 	goSigStack    gsignalStack // Go-allocated signal handling stack
 	sigmask       sigset       // storage for saved signal mask
-	tls           [6]uintptr   // thread-local storage (for x86 extern register)
+	tls           [6]uintptr   // thread-local storage (for x86 extern register) 本地存储线程
 	mstartfn      func()
 	curg          *g       // current running goroutine
 	caughtsig     guintptr // goroutine running during fatal signal
@@ -579,9 +579,9 @@ type p struct {
 	link        puintptr
 	schedtick   uint32     // incremented on every scheduler call
 	syscalltick uint32     // incremented on every system call
-	sysmontick  sysmontick // last tick observed by sysmon
+	sysmontick  sysmontick // last tick observed by sysmon 守护进程执行信息
 	m           muintptr   // back-link to associated m (nil if idle)
-	mcache      *mcache
+	mcache      *mcache    // 内存分配
 	pcache      pageCache
 	raceprocctx uintptr
 
@@ -593,6 +593,7 @@ type p struct {
 	goidcacheend uint64
 
 	// Queue of runnable goroutines. Accessed without lock.
+	// 可运行队列
 	runqhead uint32
 	runqtail uint32
 	runq     [256]guintptr
@@ -605,9 +606,11 @@ type p struct {
 	// unit and eliminates the (potentially large) scheduling
 	// latency that otherwise arises from adding the ready'd
 	// goroutines to the end of the run queue.
+	// 缓存下一个 g
 	runnext guintptr
 
 	// Available G's (status == Gdead)
+	// 可用的 g 列表
 	gFree struct {
 		gList
 		n int32
@@ -729,7 +732,7 @@ type schedt struct {
 	// When increasing nmidle, nmidlelocked, nmsys, or nmfreed, be
 	// sure to call checkdead().
 
-	midle        muintptr // idle m's waiting for work
+	midle        muintptr // idle m's waiting for work 空闲的 m
 	nmidle       int32    // number of idle m's waiting for work
 	nmidlelocked int32    // number of locked m's waiting for work
 	mnext        int64    // number of m's that have been created and next M ID

@@ -300,7 +300,9 @@ func getHugePageSize() uintptr {
 }
 
 func osinit() {
+	// 获取 cpu 个数
 	ncpu = getproccount()
+	// 获取页大小
 	physHugePageSize = getHugePageSize()
 	osArchInit()
 }

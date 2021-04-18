@@ -64,6 +64,7 @@ const (
 // sigsend delivers a signal from sighandler to the internal signal delivery queue.
 // It reports whether the signal was sent. If not, the caller typically crashes the program.
 // It runs from the signal handler, so it's limited in what it can do.
+// 这里把信号仍到sig队列里面
 func sigsend(s uint32) bool {
 	bit := uint32(1) << uint(s&31)
 	if !sig.inuse || s >= uint32(32*len(sig.wanted)) {

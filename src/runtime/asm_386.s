@@ -234,11 +234,15 @@ ok:
 	MOVL	AX, 0(SP)
 	MOVL	124(SP), AX
 	MOVL	AX, 4(SP)
+	// 初始化执行文件的绝对路径
 	CALL	runtime·args(SB)
+	// 初始化 CPU 个数和页大小
 	CALL	runtime·osinit(SB)
+	// 初始化调度器（调度器、内存分配器、回收器）
 	CALL	runtime·schedinit(SB)
 
 	// create a new goroutine to start program
+	// 创建一个新的 goroutine 启动程序，这里 goroutine 只是放到了队列里面，还没有执行
 	PUSHL	$runtime·mainPC(SB)	// entry
 	PUSHL	$0	// arg size
 	CALL	runtime·newproc(SB)

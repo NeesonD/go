@@ -163,14 +163,17 @@ func bgsweep(c chan int) {
 	goparkunlock(&sweep.lock, waitReasonGCSweepWait, traceEvGoBlock, 1)
 
 	for {
+		// 清扫 span
 		for sweepone() != ^uintptr(0) {
 			sweep.nbgsweep++
 			Gosched()
 		}
+		// 将 workbufs 中的 span 释放到 heap 中
 		for freeSomeWbufs(true) {
 			Gosched()
 		}
 		lock(&sweep.lock)
+		// 如果没有清扫完成，就一直清扫
 		if !isSweepDone() {
 			// This can happen if a GC runs between
 			// gosweepone returning ^0 above
@@ -199,6 +202,7 @@ func sweepone() uintptr {
 	atomic.Xadd(&mheap_.sweepers, +1)
 
 	// Find a span to sweep.
+	// 寻找需要 sweep 的 span
 	var s *mspan
 	sg := mheap_.sweepgen
 	for {
@@ -223,9 +227,11 @@ func sweepone() uintptr {
 	}
 
 	// Sweep the span we found.
+	// 清理 span
 	npages := ^uintptr(0)
 	if s != nil {
 		npages = s.npages
+		// false 把 page 归还到 heap 中
 		if s.sweep(false) {
 			// Whole span was freed. Count it toward the
 			// page reclaimer credit since these pages can

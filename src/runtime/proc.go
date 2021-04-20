@@ -744,6 +744,7 @@ func fastrandinit() {
 }
 
 // Mark gp ready to run.
+// 通常和 park 一起使用
 func ready(gp *g, traceskip int, next bool) {
 	if trace.enabled {
 		traceGoUnpark(gp, traceskip)
@@ -1056,6 +1057,7 @@ func stopTheWorldWithSema() {
 
 	lock(&sched.lock)
 	sched.stopwait = gomaxprocs
+	// 调度的时候会检测 gcwaiting
 	atomic.Store(&sched.gcwaiting, 1)
 	preemptall()
 	// stop current P

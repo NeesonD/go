@@ -1442,6 +1442,7 @@ func greyobject(obj, base, off uintptr, span *mspan, gcw *gcWork, objIndex uintp
 
 		// If this is a noscan object, fast-track it to black
 		// instead of greying it.
+		// 非指针对象，可以直接标黑
 		if span.spanclass.noscan() {
 			gcw.bytesMarked += uint64(span.elemsize)
 			return

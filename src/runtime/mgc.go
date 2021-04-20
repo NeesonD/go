@@ -445,6 +445,7 @@ func (c *gcControllerState) startCycle() {
 	// GOGC. Assist is proportional to this distance, so enforce a
 	// minimum distance, even if it means going over the GOGC goal
 	// by a tiny bit.
+	// 设置下次 gc 的最小值
 	if memstats.next_gc < memstats.heap_live+1024*1024 {
 		memstats.next_gc = memstats.heap_live + 1024*1024
 	}
@@ -1366,6 +1367,7 @@ func gcStart(trigger gcTrigger) {
 	// 重置标记相关的状态
 	systemstack(gcResetMarkState)
 
+	// work 初始化
 	work.stwprocs, work.maxprocs = gomaxprocs, gomaxprocs
 	if work.stwprocs > ncpu {
 		// This is used to compute CPU time of the STW phases,
@@ -2228,6 +2230,7 @@ func gcSweep(mode gcMode) {
 	lock(&sweep.lock)
 	if sweep.parked {
 		sweep.parked = false
+		// 唤醒 sweep 中的 g
 		ready(sweep.g, 0, true)
 	}
 	unlock(&sweep.lock)

@@ -159,36 +159,38 @@ func markroot(gcw *gcWork, i uint32) {
 
 	// Note: if you add a case here, please also update heapdump.go:dumproots.
 	switch {
+	// 释放 mcache 中的span
 	case baseFlushCache <= i && i < baseData:
 		flushmcache(int(i - baseFlushCache))
-
+		// 扫描可读写的全局变量
 	case baseData <= i && i < baseBSS:
 		for _, datap := range activeModules() {
 			markrootBlock(datap.data, datap.edata-datap.data, datap.gcdatamask.bytedata, gcw, int(i-baseData))
 		}
-
+		// 扫描未初始化的全局变量
 	case baseBSS <= i && i < baseSpans:
 		for _, datap := range activeModules() {
 			markrootBlock(datap.bss, datap.ebss-datap.bss, datap.gcbssmask.bytedata, gcw, int(i-baseBSS))
 		}
-
+	// 扫描 finalizers 队列
 	case i == fixedRootFinalizers:
 		for fb := allfin; fb != nil; fb = fb.alllink {
 			cnt := uintptr(atomic.Load(&fb.cnt))
 			scanblock(uintptr(unsafe.Pointer(&fb.fin[0])), cnt*unsafe.Sizeof(fb.fin[0]), &finptrmask[0], gcw, nil)
 		}
-
+		// 释放已中止的 G 的栈
 	case i == fixedRootFreeGStacks:
 		// Switch to the system stack so we can call
 		// stackfree.
 		systemstack(markrootFreeGStacks)
-
 	case baseSpans <= i && i < baseStacks:
+		// 扫描 MSpan.specials
 		// mark mspan.specials
 		markrootSpans(gcw, int(i-baseSpans))
 
 	default:
 		// the rest is scanning goroutine stacks
+		// 扫描 g
 		var gp *g
 		if baseStacks <= i && i < end {
 			gp = allgs[i-baseStacks]
@@ -986,10 +988,14 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	}
 
 	gp := getg().m.curg
+	// 看到抢占时，是否返回
 	preemptible := flags&gcDrainUntilPreempt != 0
+	// 是否计算后台的扫描量来减少协助线程和唤醒等待中的G
 	flushBgCredit := flags&gcDrainFlushBgCredit != 0
+	// 是否只执行一定量的工作
 	idle := flags&gcDrainIdle != 0
 
+	// 记录初始扫描数
 	initScanWork := gcw.scanWork
 
 	// checkWork is the scan work before performing the next

@@ -159,11 +159,13 @@ func (c *mcache) refill(spc spanClass) {
 		if s.sweepgen != mheap_.sweepgen+3 {
 			throw("bad sweepgen in refill")
 		}
+		// 将没有空间的 span 从 cache 中剔除
 		mheap_.central[spc].mcentral.uncacheSpan(s)
 	}
 
 	// Get a new cached span from the central lists.
 	// 从中心缓存申请新的 mspan
+	// 通过 cas 实现无锁获取
 	s = mheap_.central[spc].mcentral.cacheSpan()
 	if s == nil {
 		throw("out of memory")

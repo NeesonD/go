@@ -79,7 +79,7 @@ type mheap struct {
 	// store. Accesses during STW might not hold the lock, but
 	// must ensure that allocation cannot happen around the
 	// access (since that may free the backing store).
-	allspans []*mspan // all spans out there
+	allspans []*mspan // all spans out there 所有的 span 从这里分配出去
 
 	_ uint32 // align uint64 fields on 32-bit for atomics
 
@@ -409,7 +409,7 @@ type mspan struct {
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
-	nelems uintptr // number of object in the span.
+	nelems uintptr // number of object in the span. 对象数
 
 	// Cache of the allocBits at freeindex. allocCache is shifted
 	// such that the lowest bit corresponds to the bit freeindex.
@@ -456,7 +456,7 @@ type mspan struct {
 	sweepgen    uint32
 	divMul      uint16        // for divide by elemsize - divMagic.mul
 	baseMask    uint16        // if non-0, elemsize is a power of 2, & this will get object allocation base
-	allocCount  uint16        // number of allocated objects
+	allocCount  uint16        // number of allocated objects 分配的对象个数
 	spanclass   spanClass     // size class and noscan (uint8) 跨度类，决定了 span 中的存储的对象大小和个数
 	state       mSpanStateBox // mSpanInUse etc; accessed atomically (get/set methods)
 	needzero    uint8         // needs to be zeroed before allocation

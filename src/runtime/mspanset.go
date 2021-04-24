@@ -48,6 +48,7 @@ type spanSet struct {
 	// span in the heap were stored in this set, and each span were
 	// the minimum size (1 runtime page, 8 KiB), then roughly the
 	// smallest heap which would be unrepresentable is 32 TiB in size.
+	// 头尾的指针，前32位是头指针，后32位是尾指针
 	index headTailIndex
 }
 

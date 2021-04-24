@@ -847,6 +847,7 @@ var zerobase uintptr
 // nextFreeFast returns the next free object if one is quickly available.
 // Otherwise it returns 0.
 func nextFreeFast(s *mspan) gclinkptr {
+	// 从第几位开始不是 0
 	theBit := sys.Ctz64(s.allocCache) // Is there a free object in the allocCache?
 	if theBit < 64 {
 		result := s.freeindex + uintptr(theBit)
@@ -948,6 +949,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	// assistG is the G to charge for this allocation, or nil if
 	// GC is not currently active.
+	// 借贷-还债 策略
 	var assistG *g
 	if gcBlackenEnabled != 0 {
 		// Charge the current user G for this allocation.
@@ -1072,6 +1074,7 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 			size = uintptr(class_to_size[sizeclass])
 			spc := makeSpanClass(sizeclass, noscan)
 			span = c.alloc[spc]
+			// core
 			v := nextFreeFast(span)
 			if v == 0 {
 				// mcache 不够用，则从 mcentral 中申请

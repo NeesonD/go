@@ -91,7 +91,7 @@ type mstats struct {
 	// to 64 bits for atomic operations on 32 bit platforms.
 	_ [1 - _NumSizeClasses%2]uint32
 
-	last_gc_nanotime uint64 // last gc (monotonic time)
+	last_gc_nanotime uint64 // last gc (monotonic time) 上一次 gc 的时间
 	tinyallocs       uint64 // number of tiny allocations that didn't cause actual allocation; not exported to go directly
 	last_next_gc     uint64 // next_gc for the previous GC
 	last_heap_inuse  uint64 // heap_inuse at mark termination of the previous GC
@@ -113,6 +113,7 @@ type mstats struct {
 	//
 	// This is computed from triggerRatio during mark termination
 	// for the next cycle's trigger.
+	// 触发标记阶段的堆大小
 	gc_trigger uint64
 
 	// heap_live is the number of bytes considered live by the GC.

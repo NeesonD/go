@@ -267,9 +267,11 @@ func wbBufFlush1(_p_ *p) {
 		if mbits.isMarked() {
 			continue
 		}
+		// 进行标记
 		mbits.setMarked()
 
 		// Mark span.
+		// 标记 span
 		arena, pageIdx, pageMask := pageIndexOf(span.base())
 		if arena.pageMarks[pageIdx]&pageMask == 0 {
 			atomic.Or8(&arena.pageMarks[pageIdx], pageMask)

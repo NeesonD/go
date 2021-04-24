@@ -417,7 +417,7 @@ type mspan struct {
 	// ctz (count trailing zero) to use it directly.
 	// allocCache may contain bits beyond s.nelems; the caller must ignore
 	// these.
-	// 通过位图找到空闲位置
+	// 通过位图找到空闲位置 allocCache 是 allowBits 某一段的映射
 	allocCache uint64
 
 	// allocBits and gcmarkBits hold pointers to a span's mark and
@@ -442,12 +442,14 @@ type mspan struct {
 	// The sweep will free the old allocBits and set allocBits to the
 	// gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
 	// out memory.
-	allocBits  *gcBits
+	// 字节数组，大小对应 nelems
+	allocBits *gcBits
+	// 每次 gc 完之后 allocBits = gcmarkBits
 	gcmarkBits *gcBits
 
 	// sweep generation:
-	// if sweepgen == h->sweepgen - 2, the span needs sweeping
-	// if sweepgen == h->sweepgen - 1, the span is currently being swept
+	// if sweepgen == h->sweepgen - 2, the span needs sweeping 等待扫描
+	// if sweepgen == h->sweepgen - 1, the span is currently being swept 正在扫描
 	// if sweepgen == h->sweepgen, the span is swept and ready to use
 	// if sweepgen == h->sweepgen + 1, the span was cached before sweep began and is still cached, and needs sweeping
 	// if sweepgen == h->sweepgen + 3, the span was swept and then cached and is still cached

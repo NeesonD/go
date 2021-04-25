@@ -23,6 +23,7 @@ func throw(string) // provided by runtime
 //
 // A Mutex must not be copied after first use.
 type Mutex struct {
+	// waiter starving woken locked
 	state int32
 	sema  uint32
 }
@@ -84,16 +85,20 @@ func (m *Mutex) Lock() {
 func (m *Mutex) lockSlow() {
 	var waitStartTime int64
 	starving := false
+	// 唤醒标记
 	awoke := false
 	iter := 0
 	old := m.state
 	for {
 		// Don't spin in starvation mode, ownership is handed off to waiters
 		// so we won't be able to acquire the mutex anyway.
+		// 非饥饿模式并且被锁住的时候，尝试自旋
 		if old&(mutexLocked|mutexStarving) == mutexLocked && runtime_canSpin(iter) {
 			// Active spinning makes sense.
 			// Try to set mutexWoken flag to inform Unlock
 			// to not wake other blocked goroutines.
+			// old&mutexWoken == 0 没有其他正在唤醒的  goroutine
+			// old>>mutexWaiterShift != 0 当前有正在等待的 goroutine
 			if !awoke && old&mutexWoken == 0 && old>>mutexWaiterShift != 0 &&
 				atomic.CompareAndSwapInt32(&m.state, old, old|mutexWoken) {
 				awoke = true
@@ -106,9 +111,11 @@ func (m *Mutex) lockSlow() {
 		new := old
 		// Don't try to acquire starving mutex, new arriving goroutines must queue.
 		if old&mutexStarving == 0 {
+			// 如果当前不是饥饿模式，将 mutexLocked 状态置位 1，表示加锁
 			new |= mutexLocked
 		}
 		if old&(mutexLocked|mutexStarving) != 0 {
+			// 如果处于饥饿模式，则 waiter + 1
 			new += 1 << mutexWaiterShift
 		}
 		// The current goroutine switches mutex to starvation mode.
@@ -124,6 +131,7 @@ func (m *Mutex) lockSlow() {
 			if new&mutexWoken == 0 {
 				throw("sync: inconsistent mutex state")
 			}
+			// 清楚唤醒标识位
 			new &^= mutexWoken
 		}
 		if atomic.CompareAndSwapInt32(&m.state, old, new) {
@@ -135,7 +143,9 @@ func (m *Mutex) lockSlow() {
 			if waitStartTime == 0 {
 				waitStartTime = runtime_nanotime()
 			}
+			// 阻塞等待
 			runtime_SemacquireMutex(&m.sema, queueLifo, 1)
+			// 唤醒之后判断是不是应该处于饥饿状态
 			starving = starving || runtime_nanotime()-waitStartTime > starvationThresholdNs
 			old = m.state
 			if old&mutexStarving != 0 {
@@ -146,6 +156,7 @@ func (m *Mutex) lockSlow() {
 				if old&(mutexLocked|mutexWoken) != 0 || old>>mutexWaiterShift == 0 {
 					throw("sync: inconsistent mutex state")
 				}
+				// 加锁并把 waiter + 1
 				delta := int32(mutexLocked - 1<<mutexWaiterShift)
 				if !starving || old>>mutexWaiterShift == 1 {
 					// Exit starvation mode.

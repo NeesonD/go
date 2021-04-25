@@ -118,6 +118,7 @@ var (
 // It is allowed to call Notify multiple times with different channels
 // and the same signals: each channel receives copies of incoming
 // signals independently.
+// 关注的信号触发时，会发送到 c 里面
 func Notify(c chan<- os.Signal, sig ...os.Signal) {
 	if c == nil {
 		panic("os/signal: Notify using nil channel")
@@ -241,6 +242,7 @@ func process(sig os.Signal) {
 	for c, h := range handlers.m {
 		if h.want(n) {
 			// send but do not block for it
+			// 这里是非阻塞发送，所以 c 的容量需要设置
 			select {
 			case c <- sig:
 			default:

@@ -980,6 +980,7 @@ func newstack() {
 	// NOTE: stackguard0 may change underfoot, if another thread
 	// is about to try to preempt gp. Read it just once and use that same
 	// value now and below.
+	// 这里判断是栈分段还是抢占
 	preempt := atomic.Loaduintptr(&gp.stackguard0) == stackPreempt
 
 	// Be conservative about where we preempt.
@@ -995,6 +996,7 @@ func newstack() {
 	// it needs a lock held by the goroutine), that small preemption turns
 	// into a real deadlock.
 	if preempt {
+		// 持有锁、内存分配或者抢占被禁用，则不可以被抢占
 		if !canPreemptM(thisg.m) {
 			// Let the goroutine keep running for now.
 			// gp->preempt is set, so it will be preempted next time.
@@ -1022,6 +1024,7 @@ func newstack() {
 		throw("runtime: split stack overflow")
 	}
 
+	// 如果上面抢占失败
 	if preempt {
 		if gp == thisg.m.g0 {
 			throw("runtime: preempt g0")

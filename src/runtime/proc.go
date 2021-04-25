@@ -3934,7 +3934,7 @@ func malg(stacksize int32) *g {
 // This must be nosplit because this stack layout means there are
 // untyped arguments in newproc's argument frame. Stack copies won't
 // be able to adjust them and stack splits won't be able to copy them.
-// runtime·newproc(SB) 通过将 runtime.main 入栈等待执行
+// runtime·newproc(SB) 通过将 runtime.main 入栈等待执行，go 关键字
 //go:nosplit
 func newproc(siz int32, fn *funcval) {
 	argp := add(unsafe.Pointer(&fn), sys.PtrSize)
@@ -5295,6 +5295,7 @@ func retake(now int64) uint32 {
 // processor just started running it.
 // No locks need to be held.
 // Returns true if preemption request was issued to at least one goroutine.
+// 抢占所有的 goroutine，只是发出了通知
 func preemptall() bool {
 	res := false
 	for _, _p_ := range allp {
@@ -5334,6 +5335,7 @@ func preemptone(_p_ *p) bool {
 	// comparing the current stack pointer to gp->stackguard0.
 	// Setting gp->stackguard0 to StackPreempt folds
 	// preemption into the normal stack overflow check.
+	// 在 newstack 中触发，重新调度
 	gp.stackguard0 = stackPreempt
 
 	// Request an async preemption of this P.

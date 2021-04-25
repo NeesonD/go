@@ -1111,7 +1111,8 @@ var work struct {
 	cycles uint32
 
 	// Timing/utilization stats for this cycle.
-	stwprocs, maxprocs                 int32
+	stwprocs, maxprocs int32
+	// 清扫开始时间，并发标记开始时间，并发标记结束时间，并发结束
 	tSweepTerm, tMark, tMarkTerm, tEnd int64 // nanotime() of phase start
 
 	pauseNS    int64 // total STW time this cycle

@@ -527,7 +527,7 @@ var testSigusr1 func(gp *g) bool
 //
 // The garbage collector may have stopped the world, so write barriers
 // are not allowed.
-//
+// 处理信号的地方
 //go:nowritebarrierrec
 func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 	_g_ := getg()
@@ -1087,6 +1087,7 @@ func minitSignals() {
 func minitSignalStack() {
 	_g_ := getg()
 	var st stackt
+	// 获取原有的信号栈
 	sigaltstack(nil, &st)
 	if st.ss_flags&_SS_DISABLE != 0 || !iscgo {
 		signalstack(&_g_.m.gsignal.stack)

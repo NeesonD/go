@@ -546,7 +546,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	// 抢占信号
+	// 抢占信号 1.STW  2.扫描栈 3.守护进程
 	if sig == sigPreempt && debug.asyncpreemptoff == 0 {
 		// Might be a preemption signal.
 		doSigPreempt(gp, c)

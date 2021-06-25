@@ -5,7 +5,6 @@
 package runtime
 
 import (
-	"internal/cpu"
 	"runtime/internal/atomic"
 	"runtime/internal/sys"
 	"unsafe"
@@ -327,7 +326,7 @@ type gobuf struct {
 	pc   uintptr  // 程序技术器
 	g    guintptr // gobuf 对应的 goroutine
 	ctxt unsafe.Pointer
-	ret  sys.Uintreg // 系统调用的返回值
+	ret  uintptr
 	lr   uintptr
 	bp   uintptr // for framepointer-enabled architectures
 }
@@ -414,16 +413,27 @@ type g struct {
 	stackguard0 uintptr // offset known to liblink 调度器协作式调度
 	stackguard1 uintptr // offset known to liblink
 
-	_panic       *_panic        // innermost panic - offset known to liblink
-	_defer       *_defer        // innermost defer
-	m            *m             // current m; offset known to arm liblink
-	sched        gobuf          // 恢复上下文
-	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
-	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
-	stktopsp     uintptr        // expected sp at top of stack, to check in traceback
-	param        unsafe.Pointer // passed parameter on wakeup
-	atomicstatus uint32         // 当前 goroutine 状态
-	stackLock    uint32         // sigprof/scang lock; TODO: fold in to atomicstatus
+	_panic    *_panic // innermost panic - offset known to liblink
+	_defer    *_defer // innermost defer
+	m         *m      // current m; offset known to arm liblink
+	sched     gobuf
+	syscallsp uintptr // if status==Gsyscall, syscallsp = sched.sp to use during gc
+	syscallpc uintptr // if status==Gsyscall, syscallpc = sched.pc to use during gc
+	stktopsp  uintptr // expected sp at top of stack, to check in traceback
+	// param is a generic pointer parameter field used to pass
+	// values in particular contexts where other storage for the
+	// parameter would be difficult to find. It is currently used
+	// in three ways:
+	// 1. When a channel operation wakes up a blocked goroutine, it sets param to
+	//    point to the sudog of the completed blocking operation.
+	// 2. By gcAssistAlloc1 to signal back to its caller that the goroutine completed
+	//    the GC cycle. It is unsafe to do so in any other way, because the goroutine's
+	//    stack may have moved in the meantime.
+	// 3. By debugCallWrap to pass parameters to a new goroutine because allocating a
+	//    closure in the runtime is forbidden.
+	param        unsafe.Pointer
+	atomicstatus uint32
+	stackLock    uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
 	goid         int64
 	schedlink    guintptr
 	waitsince    int64      // approx time when the g become blocked
@@ -453,6 +463,10 @@ type g struct {
 
 	raceignore     int8     // ignore race detection events
 	sysblocktraced bool     // StartTrace has emitted EvGoInSyscall about this goroutine
+	tracking       bool     // whether we're tracking this G for sched latency statistics
+	trackingSeq    uint8    // used to decide whether to track this G
+	runnableStamp  int64    // timestamp of when the G last became runnable, only used when tracking
+	runnableTime   int64    // the amount of time spent runnable, cleared when running, only used when tracking
 	sysexitticks   int64    // cputicks when syscall has returned (for tracing)
 	traceseq       uint64   // trace event sequencer
 	tracelastp     puintptr // last P emitted an event for this goroutine
@@ -484,17 +498,28 @@ type g struct {
 	gcAssistBytes int64
 }
 
+// gTrackingPeriod is the number of transitions out of _Grunning between
+// latency tracking runs.
+const gTrackingPeriod = 8
+
+const (
+	// tlsSlots is the number of pointer-sized slots reserved for TLS on some platforms,
+	// like Windows.
+	tlsSlots = 6
+	tlsSize  = tlsSlots * sys.PtrSize
+)
+
 type m struct {
 	g0      *g     // goroutine with scheduling stack
 	morebuf gobuf  // gobuf arg to morestack
 	divmod  uint32 // div/mod denominator for arm - known to liblink
 
 	// Fields not known to debuggers.
-	procid        uint64       // for debuggers, but offset not hard-coded
-	gsignal       *g           // signal-handling g
-	goSigStack    gsignalStack // Go-allocated signal handling stack
-	sigmask       sigset       // storage for saved signal mask
-	tls           [6]uintptr   // thread-local storage (for x86 extern register) 本地存储线程
+	procid        uint64            // for debuggers, but offset not hard-coded
+	gsignal       *g                // signal-handling g
+	goSigStack    gsignalStack      // Go-allocated signal handling stack
+	sigmask       sigset            // storage for saved signal mask
+	tls           [tlsSlots]uintptr // thread-local storage (for x86 extern register)
 	mstartfn      func()
 	curg          *g       // current running goroutine
 	caughtsig     guintptr // goroutine running during fatal signal
@@ -538,10 +563,13 @@ type m struct {
 	syscalltick   uint32
 	freelink      *m // on sched.freem
 
-	// mFixup is used to synchronize OS related m state (credentials etc)
-	// use mutex to access.
+	// mFixup is used to synchronize OS related m state
+	// (credentials etc) use mutex to access. To avoid deadlocks
+	// an atomic.Load() of used being zero in mDoFixupFn()
+	// guarantees fn is nil.
 	mFixup struct {
 		lock mutex
+		used uint32
 		fn   func(bool) bool
 	}
 
@@ -607,7 +635,9 @@ type p struct {
 	// unit and eliminates the (potentially large) scheduling
 	// latency that otherwise arises from adding the ready'd
 	// goroutines to the end of the run queue.
-	// 缓存下一个 g
+	//
+	// Note that while other P's may atomically CAS this to zero,
+	// only the owner P can CAS it to a valid G.
 	runnext guintptr
 
 	// Available G's (status == Gdead)
@@ -719,7 +749,8 @@ type p struct {
 	// scheduler ASAP (regardless of what G is running on it).
 	preempt bool
 
-	pad cpu.CacheLinePad
+	// Padding is no longer needed. False sharing is now not a worry because p is large enough
+	// that its size class is an integer multiple of the cache line size (for any of our architectures).
 }
 
 type schedt struct {
@@ -809,6 +840,15 @@ type schedt struct {
 	// Acquire and hold this mutex to block sysmon from interacting
 	// with the rest of the runtime.
 	sysmonlock mutex
+
+	_ uint32 // ensure timeToRun has 8-byte alignment
+
+	// timeToRun is a distribution of scheduling latencies, defined
+	// as the sum of time a G spends in the _Grunnable state before
+	// it transitions to _Grunning.
+	//
+	// timeToRun is protected by sched.lock.
+	timeToRun timeHistogram
 }
 
 // Values for the flags field of a sigTabT.
@@ -839,10 +879,11 @@ type _func struct {
 	pcfile    uint32
 	pcln      uint32
 	npcdata   uint32
-	cuOffset  uint32  // runtime.cutab offset of this function's CU
-	funcID    funcID  // set for certain special runtime functions
-	_         [2]byte // pad
-	nfuncdata uint8   // must be last
+	cuOffset  uint32 // runtime.cutab offset of this function's CU
+	funcID    funcID // set for certain special runtime functions
+	flag      funcFlag
+	_         [1]byte // pad
+	nfuncdata uint8   // must be last, must end on a uint32-aligned boundary
 }
 
 // Pseudo-Func that is returned for PCs that occur in inlined code.
@@ -859,7 +900,7 @@ type funcinl struct {
 // layout of Itab known to compilers
 // allocated in non-garbage-collected memory
 // Needs to be in sync with
-// ../cmd/compile/internal/gc/reflect.go:/^func.dumptabs.
+// ../cmd/compile/internal/gc/reflect.go:/^func.WriteTabs.
 type itab struct {
 	inter *interfacetype
 	_type *_type
@@ -1058,7 +1099,6 @@ func (w waitReason) String() string {
 }
 
 var (
-	allglen    uintptr
 	allm       *m
 	gomaxprocs int32
 	ncpu       int32
@@ -1111,5 +1151,5 @@ var (
 	isarchive bool // -buildmode=c-archive
 )
 
-// Must agree with cmd/internal/objabi.Framepointer_enabled.
-const framepointer_enabled = GOARCH == "amd64" || GOARCH == "arm64" && (GOOS == "linux" || GOOS == "darwin" || GOOS == "ios")
+// Must agree with internal/buildcfg.Experiment.FramePointer.
+const framepointer_enabled = GOARCH == "amd64" || GOARCH == "arm64"

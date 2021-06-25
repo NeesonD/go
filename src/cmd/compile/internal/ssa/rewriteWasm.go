@@ -3,8 +3,8 @@
 
 package ssa
 
+import "internal/buildcfg"
 import "math"
-import "cmd/internal/objabi"
 import "cmd/compile/internal/types"
 
 func rewriteValueWasm(v *Value) bool {
@@ -526,6 +526,9 @@ func rewriteValueWasm(v *Value) bool {
 		return rewriteValueWasm_OpSlicemask(v)
 	case OpSqrt:
 		v.Op = OpWasmF64Sqrt
+		return true
+	case OpSqrt32:
+		v.Op = OpWasmF32Sqrt
 		return true
 	case OpStaticCall:
 		v.Op = OpWasmLoweredStaticCall
@@ -3190,11 +3193,11 @@ func rewriteValueWasm_OpSignExt16to32(v *Value) bool {
 		return true
 	}
 	// match: (SignExt16to32 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend16S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend16S)
@@ -3229,11 +3232,11 @@ func rewriteValueWasm_OpSignExt16to64(v *Value) bool {
 		return true
 	}
 	// match: (SignExt16to64 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend16S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend16S)
@@ -3268,11 +3271,11 @@ func rewriteValueWasm_OpSignExt32to64(v *Value) bool {
 		return true
 	}
 	// match: (SignExt32to64 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend32S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend32S)
@@ -3307,11 +3310,11 @@ func rewriteValueWasm_OpSignExt8to16(v *Value) bool {
 		return true
 	}
 	// match: (SignExt8to16 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend8S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend8S)
@@ -3346,11 +3349,11 @@ func rewriteValueWasm_OpSignExt8to32(v *Value) bool {
 		return true
 	}
 	// match: (SignExt8to32 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend8S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend8S)
@@ -3385,11 +3388,11 @@ func rewriteValueWasm_OpSignExt8to64(v *Value) bool {
 		return true
 	}
 	// match: (SignExt8to64 x)
-	// cond: objabi.GOWASM.SignExt
+	// cond: buildcfg.GOWASM.SignExt
 	// result: (I64Extend8S x)
 	for {
 		x := v_0
-		if !(objabi.GOWASM.SignExt) {
+		if !(buildcfg.GOWASM.SignExt) {
 			break
 		}
 		v.reset(OpWasmI64Extend8S)
@@ -3691,6 +3694,20 @@ func rewriteValueWasm_OpWasmI64AddConst(v *Value) bool {
 		v.AuxInt = int32ToAuxInt(int32(off) + off2)
 		v.Aux = symToAux(sym)
 		v.AddArg(base)
+		return true
+	}
+	// match: (I64AddConst [off] x:(SP))
+	// cond: isU32Bit(off)
+	// result: (LoweredAddr [int32(off)] x)
+	for {
+		off := auxIntToInt64(v.AuxInt)
+		x := v_0
+		if x.Op != OpSP || !(isU32Bit(off)) {
+			break
+		}
+		v.reset(OpWasmLoweredAddr)
+		v.AuxInt = int32ToAuxInt(int32(off))
+		v.AddArg(x)
 		return true
 	}
 	return false
@@ -4885,7 +4902,5 @@ func rewriteValueWasm_OpZeroExt8to64(v *Value) bool {
 	}
 }
 func rewriteBlockWasm(b *Block) bool {
-	switch b.Kind {
-	}
 	return false
 }

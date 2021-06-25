@@ -121,6 +121,7 @@
 (Com(32|16|8) x) => (NORconst [0] x)
 
 (Sqrt ...) => (SQRTD ...)
+(Sqrt32 ...) => (SQRTF ...)
 
 // TODO: optimize this case?
 (Ctz32NonZero ...) => (Ctz32 ...)
@@ -143,7 +144,7 @@
 (Const(32|16|8) [val]) => (MOVWconst [int32(val)])
 (Const(32|64)F ...) => (MOV(F|D)const ...)
 (ConstNil) => (MOVWconst [0])
-(ConstBool [b]) => (MOVWconst [b2i32(b)])
+(ConstBool [t]) => (MOVWconst [b2i32(t)])
 
 // truncations
 // Because we ignore high parts of registers, truncates are just copies.
@@ -559,6 +560,10 @@
 // MOVWnop doesn't emit instruction, only for ensuring the type.
 (MOVWreg x) && x.Uses == 1 => (MOVWnop x)
 
+// TODO: we should be able to get rid of MOVWnop all together.
+// But for now, this is enough to get rid of lots of them.
+(MOVWnop (MOVWconst [c])) => (MOVWconst [c])
+
 // fold constant into arithmatic ops
 (ADD x (MOVWconst [c])) => (ADDconst [c] x)
 (SUB x (MOVWconst [c])) => (SUBconst [c] x)
@@ -626,10 +631,10 @@
 (MUL (MOVWconst [c]) (MOVWconst [d])) => (MOVWconst [c*d])
 (Select1 (MULTU  (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32(uint32(c)*uint32(d))])
 (Select0 (MULTU  (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32((int64(uint32(c))*int64(uint32(d)))>>32)])
-(Select1 (DIV  (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [c/d])
-(Select1 (DIVU (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32(uint32(c)/uint32(d))])
-(Select0 (DIV  (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [c%d])
-(Select0 (DIVU (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32(uint32(c)%uint32(d))])
+(Select1 (DIV  (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [c/d])
+(Select1 (DIVU (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [int32(uint32(c)/uint32(d))])
+(Select0 (DIV  (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [c%d])
+(Select0 (DIVU (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [int32(uint32(c)%uint32(d))])
 (ANDconst [c] (MOVWconst [d])) => (MOVWconst [c&d])
 (ANDconst [c] (ANDconst [d] x)) => (ANDconst [c&d] x)
 (ORconst [c] (MOVWconst [d])) => (MOVWconst [c|d])

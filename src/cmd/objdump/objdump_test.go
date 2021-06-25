@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"go/build"
 	"internal/testenv"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,7 +38,7 @@ func TestMain(m *testing.M) {
 
 func buildObjdump() error {
 	var err error
-	tmp, err = ioutil.TempDir("", "TestObjDump")
+	tmp, err = os.MkdirTemp("", "TestObjDump")
 	if err != nil {
 		return fmt.Errorf("TempDir failed: %v", err)
 	}
@@ -65,13 +64,13 @@ var x86Need = []string{ // for both 386 and AMD64
 }
 
 var amd64GnuNeed = []string{
-	"movq",
+	"jmp",
 	"callq",
 	"cmpb",
 }
 
 var i386GnuNeed = []string{
-	"mov",
+	"jmp",
 	"call",
 	"cmp",
 }
@@ -238,9 +237,6 @@ func testGoAndCgoDisasm(t *testing.T, printCode bool, printGnuAsm bool) {
 	t.Parallel()
 	testDisasm(t, "fmthello.go", printCode, printGnuAsm)
 	if build.Default.CgoEnabled {
-		if runtime.GOOS == "aix" {
-			return // issue 40972
-		}
 		testDisasm(t, "fmthellocgo.go", printCode, printGnuAsm)
 	}
 }
@@ -262,8 +258,6 @@ func TestDisasmExtld(t *testing.T) {
 	switch runtime.GOOS {
 	case "plan9", "windows":
 		t.Skipf("skipping on %s", runtime.GOOS)
-	case "aix":
-		t.Skipf("skipping on AIX, see issue 40972")
 	}
 	t.Parallel()
 	testDisasm(t, "fmthello.go", false, false, "-ldflags=-linkmode=external")
@@ -320,7 +314,7 @@ func TestGoobjFileNumber(t *testing.T) {
 
 	t.Parallel()
 
-	tmpdir, err := ioutil.TempDir("", "TestGoobjFileNumber")
+	tmpdir, err := os.MkdirTemp("", "TestGoobjFileNumber")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,5 +343,20 @@ func TestGoobjFileNumber(t *testing.T) {
 
 	if t.Failed() {
 		t.Logf("output:\n%s", text)
+	}
+}
+
+func TestGoObjOtherVersion(t *testing.T) {
+	testenv.MustHaveExec(t)
+	t.Parallel()
+
+	obj := filepath.Join("testdata", "go116.o")
+	cmd := exec.Command(exe, obj)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("objdump go116.o succeeded unexpectly")
+	}
+	if !strings.Contains(string(out), "go object of a different version") {
+		t.Errorf("unexpected error message:\n%s", out)
 	}
 }

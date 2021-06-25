@@ -56,6 +56,7 @@
 (Com(32|16|8) ...) => (MVN ...)
 
 (Sqrt ...) => (SQRTD ...)
+(Sqrt32 ...) => (SQRTF ...)
 (Abs ...) => (ABSD ...)
 
 // TODO: optimize this for ARMv5 and ARMv6
@@ -65,17 +66,17 @@
 
 // count trailing zero for ARMv5 and ARMv6
 // 32 - CLZ(x&-x - 1)
-(Ctz32 <t> x) && objabi.GOARM<=6 =>
+(Ctz32 <t> x) && buildcfg.GOARM<=6 =>
 	(RSBconst [32] (CLZ <t> (SUBconst <t> (AND <t> x (RSBconst <t> [0] x)) [1])))
-(Ctz16 <t> x) && objabi.GOARM<=6 =>
+(Ctz16 <t> x) && buildcfg.GOARM<=6 =>
 	(RSBconst [32] (CLZ <t> (SUBconst <typ.UInt32> (AND <typ.UInt32> (ORconst <typ.UInt32> [0x10000] x) (RSBconst <typ.UInt32> [0] (ORconst <typ.UInt32> [0x10000] x))) [1])))
-(Ctz8 <t> x) && objabi.GOARM<=6 =>
+(Ctz8 <t> x) && buildcfg.GOARM<=6 =>
 	(RSBconst [32] (CLZ <t> (SUBconst <typ.UInt32> (AND <typ.UInt32> (ORconst <typ.UInt32> [0x100] x) (RSBconst <typ.UInt32> [0] (ORconst <typ.UInt32> [0x100] x))) [1])))
 
 // count trailing zero for ARMv7
-(Ctz32 <t> x) && objabi.GOARM==7 => (CLZ <t> (RBIT <t> x))
-(Ctz16 <t> x) && objabi.GOARM==7 => (CLZ <t> (RBIT <typ.UInt32> (ORconst <typ.UInt32> [0x10000] x)))
-(Ctz8 <t> x) && objabi.GOARM==7 => (CLZ <t> (RBIT <typ.UInt32> (ORconst <typ.UInt32> [0x100] x)))
+(Ctz32 <t> x) && buildcfg.GOARM==7 => (CLZ <t> (RBIT <t> x))
+(Ctz16 <t> x) && buildcfg.GOARM==7 => (CLZ <t> (RBIT <typ.UInt32> (ORconst <typ.UInt32> [0x10000] x)))
+(Ctz8 <t> x) && buildcfg.GOARM==7 => (CLZ <t> (RBIT <typ.UInt32> (ORconst <typ.UInt32> [0x100] x)))
 
 // bit length
 (BitLen32 <t> x) => (RSBconst [32] (CLZ <t> x))
@@ -89,13 +90,13 @@
 // t5 = x right rotate 8 bits  -- (d,   a,   b,   c  )
 // result = t4 ^ t5            -- (d,   c,   b,   a  )
 // using shifted ops this can be done in 4 instructions.
-(Bswap32 <t> x) && objabi.GOARM==5 =>
+(Bswap32 <t> x) && buildcfg.GOARM==5 =>
 	(XOR <t>
 		(SRLconst <t> (BICconst <t> (XOR <t> x (SRRconst <t> [16] x)) [0xff0000]) [8])
 		(SRRconst <t> x [8]))
 
 // byte swap for ARMv6 and above
-(Bswap32 x) && objabi.GOARM>=6 => (REV x)
+(Bswap32 x) && buildcfg.GOARM>=6 => (REV x)
 
 // boolean ops -- booleans are represented with 0=false, 1=true
 (AndB ...) => (AND ...)
@@ -172,7 +173,7 @@
 (Const(8|16|32) [val]) => (MOVWconst [int32(val)])
 (Const(32|64)F [val]) => (MOV(F|D)const [float64(val)])
 (ConstNil) => (MOVWconst [0])
-(ConstBool [b]) => (MOVWconst [b2i32(b)])
+(ConstBool [t]) => (MOVWconst [b2i32(t)])
 
 // truncations
 // Because we ignore high parts of registers, truncates are just copies.
@@ -507,7 +508,7 @@
 (TEQ x (MOVWconst [c])) => (TEQconst [c] x)
 
 // Canonicalize the order of arguments to comparisons - helps with CSE.
-(CMP x y) && x.ID > y.ID => (InvertFlags (CMP y x))
+(CMP x y) && canonLessThan(x,y) => (InvertFlags (CMP y x))
 
 // don't extend after proper load
 // MOVWreg instruction is not emitted if src and dst registers are same, but it ensures the type.
@@ -545,6 +546,10 @@
 // if a register move has only 1 use, just use the same register without emitting instruction
 // MOVWnop doesn't emit instruction, only for ensuring the type.
 (MOVWreg x) && x.Uses == 1 => (MOVWnop x)
+
+// TODO: we should be able to get rid of MOVWnop all together.
+// But for now, this is enough to get rid of lots of them.
+(MOVWnop (MOVWconst [c])) => (MOVWconst [c])
 
 // mul by constant
 (MUL x (MOVWconst [c])) && int32(c) == -1 => (RSBconst [0] x)
@@ -732,10 +737,10 @@
 (SUBconst [c] x) && !isARMImmRot(uint32(c)) && isARMImmRot(uint32(-c)) => (ADDconst [-c] x)
 (ANDconst [c] x) && !isARMImmRot(uint32(c)) && isARMImmRot(^uint32(c)) => (BICconst [int32(^uint32(c))] x)
 (BICconst [c] x) && !isARMImmRot(uint32(c)) && isARMImmRot(^uint32(c)) => (ANDconst [int32(^uint32(c))] x)
-(ADDconst [c] x) && objabi.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && uint32(-c)<=0xffff => (SUBconst [-c] x)
-(SUBconst [c] x) && objabi.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && uint32(-c)<=0xffff => (ADDconst [-c] x)
-(ANDconst [c] x) && objabi.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && ^uint32(c)<=0xffff => (BICconst [int32(^uint32(c))] x)
-(BICconst [c] x) && objabi.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && ^uint32(c)<=0xffff => (ANDconst [int32(^uint32(c))] x)
+(ADDconst [c] x) && buildcfg.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && uint32(-c)<=0xffff => (SUBconst [-c] x)
+(SUBconst [c] x) && buildcfg.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && uint32(-c)<=0xffff => (ADDconst [-c] x)
+(ANDconst [c] x) && buildcfg.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && ^uint32(c)<=0xffff => (BICconst [int32(^uint32(c))] x)
+(BICconst [c] x) && buildcfg.GOARM==7 && !isARMImmRot(uint32(c)) && uint32(c)>0xffff && ^uint32(c)<=0xffff => (ANDconst [int32(^uint32(c))] x)
 (ADDconst [c] (MOVWconst [d])) => (MOVWconst [c+d])
 (ADDconst [c] (ADDconst [d] x)) => (ADDconst [c+d] x)
 (ADDconst [c] (SUBconst [d] x)) => (ADDconst [c-d] x)
@@ -760,8 +765,8 @@
 (MUL (MOVWconst [c]) (MOVWconst [d])) => (MOVWconst [c*d])
 (MULA (MOVWconst [c]) (MOVWconst [d]) a) => (ADDconst [c*d] a)
 (MULS (MOVWconst [c]) (MOVWconst [d]) a) => (SUBconst [c*d] a)
-(Select0 (CALLudiv (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32(uint32(c)/uint32(d))])
-(Select1 (CALLudiv (MOVWconst [c]) (MOVWconst [d]))) => (MOVWconst [int32(uint32(c)%uint32(d))])
+(Select0 (CALLudiv (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [int32(uint32(c)/uint32(d))])
+(Select1 (CALLudiv (MOVWconst [c]) (MOVWconst [d]))) && d != 0 => (MOVWconst [int32(uint32(c)%uint32(d))])
 (ANDconst [c] (MOVWconst [d])) => (MOVWconst [c&d])
 (ANDconst [c] (ANDconst [d] x)) => (ANDconst [c&d] x)
 (ORconst [c] (MOVWconst [d])) => (MOVWconst [c|d])
@@ -1139,7 +1144,7 @@
 // UBFX instruction is supported by ARMv6T2, ARMv7 and above versions, REV16 is supported by
 // ARMv6 and above versions. So for ARMv6, we need to match SLLconst, SRLconst and ORshiftLL.
 ((ADDshiftLL|ORshiftLL|XORshiftLL) <typ.UInt16> [8] (BFXU <typ.UInt16> [int32(armBFAuxInt(8, 8))] x) x) => (REV16 x)
-((ADDshiftLL|ORshiftLL|XORshiftLL) <typ.UInt16> [8] (SRLconst <typ.UInt16> [24] (SLLconst [16] x)) x) && objabi.GOARM>=6 => (REV16 x)
+((ADDshiftLL|ORshiftLL|XORshiftLL) <typ.UInt16> [8] (SRLconst <typ.UInt16> [24] (SLLconst [16] x)) x) && buildcfg.GOARM>=6 => (REV16 x)
 
 // use indexed loads and stores
 (MOVWload [0] {sym} (ADD ptr idx) mem) && sym == nil => (MOVWloadidx ptr idx mem)
@@ -1209,25 +1214,25 @@
 (BIC x x) => (MOVWconst [0])
 
 (ADD (MUL x y) a) => (MULA x y a)
-(SUB a (MUL x y)) && objabi.GOARM == 7 => (MULS x y a)
-(RSB (MUL x y) a) && objabi.GOARM == 7 => (MULS x y a)
+(SUB a (MUL x y)) && buildcfg.GOARM == 7 => (MULS x y a)
+(RSB (MUL x y) a) && buildcfg.GOARM == 7 => (MULS x y a)
 
-(NEGF (MULF x y)) && objabi.GOARM >= 6 => (NMULF x y)
-(NEGD (MULD x y)) && objabi.GOARM >= 6 => (NMULD x y)
-(MULF (NEGF x) y) && objabi.GOARM >= 6 => (NMULF x y)
-(MULD (NEGD x) y) && objabi.GOARM >= 6 => (NMULD x y)
+(NEGF (MULF x y)) && buildcfg.GOARM >= 6 => (NMULF x y)
+(NEGD (MULD x y)) && buildcfg.GOARM >= 6 => (NMULD x y)
+(MULF (NEGF x) y) && buildcfg.GOARM >= 6 => (NMULF x y)
+(MULD (NEGD x) y) && buildcfg.GOARM >= 6 => (NMULD x y)
 (NMULF (NEGF x) y) => (MULF x y)
 (NMULD (NEGD x) y) => (MULD x y)
 
 // the result will overwrite the addend, since they are in the same register
-(ADDF a (MULF x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULAF a x y)
-(ADDF a (NMULF x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULSF a x y)
-(ADDD a (MULD x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULAD a x y)
-(ADDD a (NMULD x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULSD a x y)
-(SUBF a (MULF x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULSF a x y)
-(SUBF a (NMULF x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULAF a x y)
-(SUBD a (MULD x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULSD a x y)
-(SUBD a (NMULD x y)) && a.Uses == 1 && objabi.GOARM >= 6 => (MULAD a x y)
+(ADDF a (MULF x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULAF a x y)
+(ADDF a (NMULF x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULSF a x y)
+(ADDD a (MULD x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULAD a x y)
+(ADDD a (NMULD x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULSD a x y)
+(SUBF a (MULF x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULSF a x y)
+(SUBF a (NMULF x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULAF a x y)
+(SUBD a (MULD x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULSD a x y)
+(SUBD a (NMULD x y)) && a.Uses == 1 && buildcfg.GOARM >= 6 => (MULAD a x y)
 
 (AND x (MVN y)) => (BIC x y)
 
@@ -1259,8 +1264,8 @@
 (CMPD x (MOVDconst [0])) => (CMPD0 x)
 
 // bit extraction
-(SRAconst (SLLconst x [c]) [d]) && objabi.GOARM==7 && uint64(d)>=uint64(c) && uint64(d)<=31 => (BFX [(d-c)|(32-d)<<8] x)
-(SRLconst (SLLconst x [c]) [d]) && objabi.GOARM==7 && uint64(d)>=uint64(c) && uint64(d)<=31 => (BFXU [(d-c)|(32-d)<<8] x)
+(SRAconst (SLLconst x [c]) [d]) && buildcfg.GOARM==7 && uint64(d)>=uint64(c) && uint64(d)<=31 => (BFX [(d-c)|(32-d)<<8] x)
+(SRLconst (SLLconst x [c]) [d]) && buildcfg.GOARM==7 && uint64(d)>=uint64(c) && uint64(d)<=31 => (BFXU [(d-c)|(32-d)<<8] x)
 
 // comparison simplification
 ((LT|LE|EQ|NE|GE|GT) (CMP x (RSBconst [0] y))) => ((LT|LE|EQ|NE|GE|GT) (CMN x y)) // sense of carry bit not preserved
@@ -1369,38 +1374,38 @@
 (LE (CMPconst [0] l:(ADDshiftLLreg x y z)) yes no) && l.Uses==1 => (LEnoov (CMNshiftLLreg x y z) yes no)
 (LE (CMPconst [0] l:(ADDshiftRLreg x y z)) yes no) && l.Uses==1 => (LEnoov (CMNshiftRLreg x y z) yes no)
 (LE (CMPconst [0] l:(ADDshiftRAreg x y z)) yes no) && l.Uses==1 => (LEnoov (CMNshiftRAreg x y z) yes no)
-(LT (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (LT (TST x y) yes no)
-(LT (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (LT (TSTconst [c] x) yes no)
-(LT (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (LT (TSTshiftLL x y [c]) yes no)
-(LT (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (LT (TSTshiftRL x y [c]) yes no)
-(LT (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (LT (TSTshiftRA x y [c]) yes no)
-(LT (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (LT (TSTshiftLLreg x y z) yes no)
-(LT (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (LT (TSTshiftRLreg x y z) yes no)
-(LT (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (LT (TSTshiftRAreg x y z) yes no)
-(LE (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (LE (TST x y) yes no)
-(LE (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (LE (TSTconst [c] x) yes no)
-(LE (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (LE (TSTshiftLL x y [c]) yes no)
-(LE (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (LE (TSTshiftRL x y [c]) yes no)
-(LE (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (LE (TSTshiftRA x y [c]) yes no)
-(LE (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (LE (TSTshiftLLreg x y z) yes no)
-(LE (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (LE (TSTshiftRLreg x y z) yes no)
-(LE (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (LE (TSTshiftRAreg x y z) yes no)
-(LT (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (LT (TEQ x y) yes no)
-(LT (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (LT (TEQconst [c] x) yes no)
-(LT (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (LT (TEQshiftLL x y [c]) yes no)
-(LT (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (LT (TEQshiftRL x y [c]) yes no)
-(LT (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (LT (TEQshiftRA x y [c]) yes no)
-(LT (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (LT (TEQshiftLLreg x y z) yes no)
-(LT (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (LT (TEQshiftRLreg x y z) yes no)
-(LT (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (LT (TEQshiftRAreg x y z) yes no)
-(LE (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (LE (TEQ x y) yes no)
-(LE (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1  => (LE (TEQconst [c] x) yes no)
-(LE (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (LE (TEQshiftLL x y [c]) yes no)
-(LE (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (LE (TEQshiftRL x y [c]) yes no)
-(LE (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (LE (TEQshiftRA x y [c]) yes no)
-(LE (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (LE (TEQshiftLLreg x y z) yes no)
-(LE (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (LE (TEQshiftRLreg x y z) yes no)
-(LE (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (LE (TEQshiftRAreg x y z) yes no)
+(LT (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (LTnoov (TST x y) yes no)
+(LT (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (LTnoov (TSTconst [c] x) yes no)
+(LT (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (LTnoov (TSTshiftLL x y [c]) yes no)
+(LT (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (LTnoov (TSTshiftRL x y [c]) yes no)
+(LT (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (LTnoov (TSTshiftRA x y [c]) yes no)
+(LT (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (LTnoov (TSTshiftLLreg x y z) yes no)
+(LT (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (LTnoov (TSTshiftRLreg x y z) yes no)
+(LT (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (LTnoov (TSTshiftRAreg x y z) yes no)
+(LE (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (LEnoov (TST x y) yes no)
+(LE (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (LEnoov (TSTconst [c] x) yes no)
+(LE (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (LEnoov (TSTshiftLL x y [c]) yes no)
+(LE (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (LEnoov (TSTshiftRL x y [c]) yes no)
+(LE (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (LEnoov (TSTshiftRA x y [c]) yes no)
+(LE (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (LEnoov (TSTshiftLLreg x y z) yes no)
+(LE (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (LEnoov (TSTshiftRLreg x y z) yes no)
+(LE (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (LEnoov (TSTshiftRAreg x y z) yes no)
+(LT (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (LTnoov (TEQ x y) yes no)
+(LT (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (LTnoov (TEQconst [c] x) yes no)
+(LT (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (LTnoov (TEQshiftLL x y [c]) yes no)
+(LT (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (LTnoov (TEQshiftRL x y [c]) yes no)
+(LT (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (LTnoov (TEQshiftRA x y [c]) yes no)
+(LT (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (LTnoov (TEQshiftLLreg x y z) yes no)
+(LT (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (LTnoov (TEQshiftRLreg x y z) yes no)
+(LT (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (LTnoov (TEQshiftRAreg x y z) yes no)
+(LE (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (LEnoov (TEQ x y) yes no)
+(LE (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1  => (LEnoov (TEQconst [c] x) yes no)
+(LE (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (LEnoov (TEQshiftLL x y [c]) yes no)
+(LE (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (LEnoov (TEQshiftRL x y [c]) yes no)
+(LE (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (LEnoov (TEQshiftRA x y [c]) yes no)
+(LE (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (LEnoov (TEQshiftLLreg x y z) yes no)
+(LE (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (LEnoov (TEQshiftRLreg x y z) yes no)
+(LE (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (LEnoov (TEQshiftRAreg x y z) yes no)
 (GT (CMPconst [0] l:(SUB x y)) yes no) && l.Uses==1 => (GTnoov (CMP x y) yes no)
 (GT (CMPconst [0] l:(MULS x y a)) yes no) && l.Uses==1 => (GTnoov (CMP a (MUL <x.Type> x y)) yes no)
 (GT (CMPconst [0] l:(SUBconst [c] x)) yes no) && l.Uses==1 => (GTnoov (CMPconst [c] x) yes no)
@@ -1436,39 +1441,39 @@
 (GE (CMPconst [0] l:(ADDshiftLLreg x y z)) yes no) && l.Uses==1 => (GEnoov (CMNshiftLLreg x y z) yes no)
 (GE (CMPconst [0] l:(ADDshiftRLreg x y z)) yes no) && l.Uses==1 => (GEnoov (CMNshiftRLreg x y z) yes no)
 (GE (CMPconst [0] l:(ADDshiftRAreg x y z)) yes no) && l.Uses==1 => (GEnoov (CMNshiftRAreg x y z) yes no)
-(GT (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (GT (TST x y) yes no)
 (GT (CMPconst [0] l:(MULA x y a)) yes no) && l.Uses==1 => (GTnoov (CMN a (MUL <x.Type> x y)) yes no)
-(GT (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (GT (TSTconst [c] x) yes no)
-(GT (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (GT (TSTshiftLL x y [c]) yes no)
-(GT (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (GT (TSTshiftRL x y [c]) yes no)
-(GT (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (GT (TSTshiftRA x y [c]) yes no)
-(GT (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (GT (TSTshiftLLreg x y z) yes no)
-(GT (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (GT (TSTshiftRLreg x y z) yes no)
-(GT (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (GT (TSTshiftRAreg x y z) yes no)
-(GE (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (GE (TST x y) yes no)
-(GE (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (GE (TSTconst [c] x) yes no)
-(GE (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (GE (TSTshiftLL x y [c]) yes no)
-(GE (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (GE (TSTshiftRL x y [c]) yes no)
-(GE (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (GE (TSTshiftRA x y [c]) yes no)
-(GE (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (GE (TSTshiftLLreg x y z) yes no)
-(GE (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (GE (TSTshiftRLreg x y z) yes no)
-(GE (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (GE (TSTshiftRAreg x y z) yes no)
-(GT (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (GT (TEQ x y) yes no)
-(GT (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (GT (TEQconst [c] x) yes no)
-(GT (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (GT (TEQshiftLL x y [c]) yes no)
-(GT (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (GT (TEQshiftRL x y [c]) yes no)
-(GT (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (GT (TEQshiftRA x y [c]) yes no)
-(GT (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (GT (TEQshiftLLreg x y z) yes no)
-(GT (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (GT (TEQshiftRLreg x y z) yes no)
-(GT (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (GT (TEQshiftRAreg x y z) yes no)
-(GE (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (GE (TEQ x y) yes no)
-(GE (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (GE (TEQconst [c] x) yes no)
-(GE (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (GE (TEQshiftLL x y [c]) yes no)
-(GE (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (GE (TEQshiftRL x y [c]) yes no)
-(GE (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (GE (TEQshiftRA x y [c]) yes no)
-(GE (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (GE (TEQshiftLLreg x y z) yes no)
-(GE (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (GE (TEQshiftRLreg x y z) yes no)
-(GE (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (GE (TEQshiftRAreg x y z) yes no)
+(GT (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (GTnoov (TST x y) yes no)
+(GT (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (GTnoov (TSTconst [c] x) yes no)
+(GT (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (GTnoov (TSTshiftLL x y [c]) yes no)
+(GT (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (GTnoov (TSTshiftRL x y [c]) yes no)
+(GT (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (GTnoov (TSTshiftRA x y [c]) yes no)
+(GT (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (GTnoov (TSTshiftLLreg x y z) yes no)
+(GT (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (GTnoov (TSTshiftRLreg x y z) yes no)
+(GT (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (GTnoov (TSTshiftRAreg x y z) yes no)
+(GE (CMPconst [0] l:(AND x y)) yes no) && l.Uses==1 => (GEnoov (TST x y) yes no)
+(GE (CMPconst [0] l:(ANDconst [c] x)) yes no) && l.Uses==1 => (GEnoov (TSTconst [c] x) yes no)
+(GE (CMPconst [0] l:(ANDshiftLL x y [c])) yes no) && l.Uses==1 => (GEnoov (TSTshiftLL x y [c]) yes no)
+(GE (CMPconst [0] l:(ANDshiftRL x y [c])) yes no) && l.Uses==1 => (GEnoov (TSTshiftRL x y [c]) yes no)
+(GE (CMPconst [0] l:(ANDshiftRA x y [c])) yes no) && l.Uses==1 => (GEnoov (TSTshiftRA x y [c]) yes no)
+(GE (CMPconst [0] l:(ANDshiftLLreg x y z)) yes no) && l.Uses==1 => (GEnoov (TSTshiftLLreg x y z) yes no)
+(GE (CMPconst [0] l:(ANDshiftRLreg x y z)) yes no) && l.Uses==1 => (GEnoov (TSTshiftRLreg x y z) yes no)
+(GE (CMPconst [0] l:(ANDshiftRAreg x y z)) yes no) && l.Uses==1 => (GEnoov (TSTshiftRAreg x y z) yes no)
+(GT (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (GTnoov (TEQ x y) yes no)
+(GT (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (GTnoov (TEQconst [c] x) yes no)
+(GT (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (GTnoov (TEQshiftLL x y [c]) yes no)
+(GT (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (GTnoov (TEQshiftRL x y [c]) yes no)
+(GT (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (GTnoov (TEQshiftRA x y [c]) yes no)
+(GT (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (GTnoov (TEQshiftLLreg x y z) yes no)
+(GT (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (GTnoov (TEQshiftRLreg x y z) yes no)
+(GT (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (GTnoov (TEQshiftRAreg x y z) yes no)
+(GE (CMPconst [0] l:(XOR x y)) yes no) && l.Uses==1 => (GEnoov (TEQ x y) yes no)
+(GE (CMPconst [0] l:(XORconst [c] x)) yes no) && l.Uses==1 => (GEnoov (TEQconst [c] x) yes no)
+(GE (CMPconst [0] l:(XORshiftLL x y [c])) yes no) && l.Uses==1 => (GEnoov (TEQshiftLL x y [c]) yes no)
+(GE (CMPconst [0] l:(XORshiftRL x y [c])) yes no) && l.Uses==1 => (GEnoov (TEQshiftRL x y [c]) yes no)
+(GE (CMPconst [0] l:(XORshiftRA x y [c])) yes no) && l.Uses==1 => (GEnoov (TEQshiftRA x y [c]) yes no)
+(GE (CMPconst [0] l:(XORshiftLLreg x y z)) yes no) && l.Uses==1 => (GEnoov (TEQshiftLLreg x y z) yes no)
+(GE (CMPconst [0] l:(XORshiftRLreg x y z)) yes no) && l.Uses==1 => (GEnoov (TEQshiftRLreg x y z) yes no)
+(GE (CMPconst [0] l:(XORshiftRAreg x y z)) yes no) && l.Uses==1 => (GEnoov (TEQshiftRAreg x y z) yes no)
 
 (MOVBUload [off] {sym} (SB) _) && symIsRO(sym) => (MOVWconst [int32(read8(sym, int64(off)))])
 (MOVHUload [off] {sym} (SB) _) && symIsRO(sym) => (MOVWconst [int32(read16(sym, int64(off), config.ctxt.Arch.ByteOrder))])

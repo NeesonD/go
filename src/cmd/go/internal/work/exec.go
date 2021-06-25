@@ -8,19 +8,18 @@ package work
 
 import (
 	"bytes"
-	"cmd/go/internal/fsys"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"internal/buildcfg"
+	exec "internal/execabs"
 	"internal/lazyregexp"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -32,6 +31,7 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/fsys"
 	"cmd/go/internal/load"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
@@ -94,7 +94,7 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				base.Fatalf("go: refusing to write action graph to %v\n", file)
 			}
 			js := actionGraphJSON(root)
-			if err := ioutil.WriteFile(file, []byte(js), 0666); err != nil {
+			if err := os.WriteFile(file, []byte(js), 0666); err != nil {
 				fmt.Fprintf(os.Stderr, "go: writing action graph: %v\n", err)
 				base.SetExitStatus(1)
 			}
@@ -246,17 +246,30 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	if p.Internal.ForceLibrary {
 		fmt.Fprintf(h, "forcelibrary\n")
 	}
-	if len(p.CgoFiles)+len(p.SwigFiles) > 0 {
+	if len(p.CgoFiles)+len(p.SwigFiles)+len(p.SwigCXXFiles) > 0 {
 		fmt.Fprintf(h, "cgo %q\n", b.toolID("cgo"))
 		cppflags, cflags, cxxflags, fflags, ldflags, _ := b.CFlags(p)
-		fmt.Fprintf(h, "CC=%q %q %q %q\n", b.ccExe(), cppflags, cflags, ldflags)
-		if len(p.CXXFiles)+len(p.SwigFiles) > 0 {
-			fmt.Fprintf(h, "CXX=%q %q\n", b.cxxExe(), cxxflags)
+
+		ccExe := b.ccExe()
+		fmt.Fprintf(h, "CC=%q %q %q %q\n", ccExe, cppflags, cflags, ldflags)
+		if ccID, err := b.gccToolID(ccExe[0], "c"); err == nil {
+			fmt.Fprintf(h, "CC ID=%q\n", ccID)
+		}
+		if len(p.CXXFiles)+len(p.SwigCXXFiles) > 0 {
+			cxxExe := b.cxxExe()
+			fmt.Fprintf(h, "CXX=%q %q\n", cxxExe, cxxflags)
+			if cxxID, err := b.gccToolID(cxxExe[0], "c++"); err == nil {
+				fmt.Fprintf(h, "CXX ID=%q\n", cxxID)
+			}
 		}
 		if len(p.FFiles) > 0 {
-			fmt.Fprintf(h, "FC=%q %q\n", b.fcExe(), fflags)
+			fcExe := b.fcExe()
+			fmt.Fprintf(h, "FC=%q %q\n", fcExe, fflags)
+			if fcID, err := b.gccToolID(fcExe[0], "f95"); err == nil {
+				fmt.Fprintf(h, "FC ID=%q\n", fcID)
+			}
 		}
-		// TODO(rsc): Should we include the SWIG version or Fortran/GCC/G++/Objective-C compiler versions?
+		// TODO(rsc): Should we include the SWIG version?
 	}
 	if p.Internal.CoverMode != "" {
 		fmt.Fprintf(h, "cover %q %q\n", p.Internal.CoverMode, b.toolID("cover"))
@@ -277,6 +290,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		key, val := cfg.GetArchEnv()
 		fmt.Fprintf(h, "%s=%s\n", key, val)
 
+		if goexperiment := buildcfg.GOEXPERIMENT(); goexperiment != "" {
+			fmt.Fprintf(h, "GOEXPERIMENT=%q\n", goexperiment)
+		}
+
 		// TODO(rsc): Convince compiler team not to add more magic environment variables,
 		// or perhaps restrict the environment variables passed to subprocesses.
 		// Because these are clumsy, undocumented special-case hacks
@@ -285,7 +302,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		magic := []string{
 			"GOCLOBBERDEADHASH",
 			"GOSSAFUNC",
-			"GO_SSA_PHI_LOC_CUTOFF",
+			"GOSSADIR",
 			"GOSSAHASH",
 		}
 		for _, env := range magic {
@@ -312,7 +329,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		}
 
 	case "gccgo":
-		id, err := b.gccgoToolID(BuildToolchain.compiler(), "go")
+		id, err := b.gccToolID(BuildToolchain.compiler(), "go")
 		if err != nil {
 			base.Fatalf("%v", err)
 		}
@@ -320,7 +337,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		fmt.Fprintf(h, "pkgpath %s\n", gccgoPkgpath(p))
 		fmt.Fprintf(h, "ar %q\n", BuildToolchain.(gccgoToolchain).ar())
 		if len(p.SFiles) > 0 {
-			id, _ = b.gccgoToolID(BuildToolchain.compiler(), "assembler-with-cpp")
+			id, _ = b.gccToolID(BuildToolchain.compiler(), "assembler-with-cpp")
 			// Ignore error; different assembler versions
 			// are unlikely to make any difference anyhow.
 			fmt.Fprintf(h, "asm %q\n", id)
@@ -636,7 +653,7 @@ OverlayLoop:
 			sfiles, gccfiles = filter(sfiles, sfiles[:0], gccfiles)
 		} else {
 			for _, sfile := range sfiles {
-				data, err := ioutil.ReadFile(filepath.Join(a.Package.Dir, sfile))
+				data, err := os.ReadFile(filepath.Join(a.Package.Dir, sfile))
 				if err == nil {
 					if bytes.HasPrefix(data, []byte("TEXT")) || bytes.Contains(data, []byte("\nTEXT")) ||
 						bytes.HasPrefix(data, []byte("DATA")) || bytes.Contains(data, []byte("\nDATA")) ||
@@ -650,6 +667,10 @@ OverlayLoop:
 		}
 
 		outGo, outObj, err := b.cgo(a, base.Tool("cgo"), objdir, pcCFLAGS, pcLDFLAGS, mkAbsFiles(a.Package.Dir, cgofiles), gccfiles, cxxfiles, a.Package.MFiles, a.Package.FFiles)
+
+		// The files in cxxfiles have now been handled by b.cgo.
+		cxxfiles = nil
+
 		if err != nil {
 			return err
 		}
@@ -1165,6 +1186,7 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 		return err
 	}
 
+	// TODO(rsc): Why do we pass $GCCGO to go vet?
 	env := b.cCompilerEnv()
 	if cfg.BuildToolchainName == "gccgo" {
 		env = append(env, "GCCGO="+BuildToolchain.compiler())
@@ -1246,6 +1268,10 @@ func (b *Builder) printLinkerConfig(h io.Writer, p *load.Package) {
 		key, val := cfg.GetArchEnv()
 		fmt.Fprintf(h, "%s=%s\n", key, val)
 
+		if goexperiment := buildcfg.GOEXPERIMENT(); goexperiment != "" {
+			fmt.Fprintf(h, "GOEXPERIMENT=%q\n", goexperiment)
+		}
+
 		// The linker writes source file paths that say GOROOT_FINAL, but
 		// only if -trimpath is not specified (see ld() in gc.go).
 		gorootFinal := cfg.GOROOT_FINAL
@@ -1261,7 +1287,7 @@ func (b *Builder) printLinkerConfig(h io.Writer, p *load.Package) {
 		// Or external linker settings and flags?
 
 	case "gccgo":
-		id, err := b.gccgoToolID(BuildToolchain.linker(), "go")
+		id, err := b.gccToolID(BuildToolchain.linker(), "go")
 		if err != nil {
 			base.Fatalf("%v", err)
 		}
@@ -1471,7 +1497,7 @@ func (b *Builder) installShlibname(ctx context.Context, a *Action) error {
 
 	// TODO: BuildN
 	a1 := a.Deps[0]
-	err := ioutil.WriteFile(a.Target, []byte(filepath.Base(a1.Target)+"\n"), 0666)
+	err := os.WriteFile(a.Target, []byte(filepath.Base(a1.Target)+"\n"), 0666)
 	if err != nil {
 		return err
 	}
@@ -1788,7 +1814,7 @@ func (b *Builder) writeFile(file string, text []byte) error {
 	if cfg.BuildN {
 		return nil
 	}
-	return ioutil.WriteFile(file, text, 0666)
+	return os.WriteFile(file, text, 0666)
 }
 
 // Install the cgo export header file, if there is one.
@@ -1841,6 +1867,7 @@ var objectMagic = [][]byte{
 	{0xCE, 0xFA, 0xED, 0xFE},                  // Mach-O little-endian 32-bit
 	{0xCF, 0xFA, 0xED, 0xFE},                  // Mach-O little-endian 64-bit
 	{0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00},      // PE (Windows) as generated by 6l/8l and gcc
+	{0x4d, 0x5a, 0x78, 0x00, 0x01, 0x00},      // PE (Windows) as generated by llvm for dll
 	{0x00, 0x00, 0x01, 0xEB},                  // Plan 9 i386
 	{0x00, 0x00, 0x8a, 0x97},                  // Plan 9 amd64
 	{0x00, 0x00, 0x06, 0x47},                  // Plan 9 arm
@@ -2045,6 +2072,9 @@ func (b *Builder) runOut(a *Action, dir string, env []string, cmdargs ...interfa
 
 	var buf bytes.Buffer
 	cmd := exec.Command(cmdline[0], cmdline[1:]...)
+	if cmd.Path != "" {
+		cmd.Args[0] = cmd.Path
+	}
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	cleanup := passLongArgsInResponseFiles(cmd)
@@ -2054,8 +2084,11 @@ func (b *Builder) runOut(a *Action, dir string, env []string, cmdargs ...interfa
 
 	// Add the TOOLEXEC_IMPORTPATH environment variable for -toolexec tools.
 	// It doesn't really matter if -toolexec isn't being used.
+	// Note that a.Package.Desc is not really an import path,
+	// but this is consistent with 'go list -f {{.ImportPath}}'.
+	// Plus, it is useful to uniquely identify packages in 'go list -json'.
 	if a != nil && a.Package != nil {
-		cmd.Env = append(cmd.Env, "TOOLEXEC_IMPORTPATH="+a.Package.ImportPath)
+		cmd.Env = append(cmd.Env, "TOOLEXEC_IMPORTPATH="+a.Package.Desc())
 	}
 
 	cmd.Env = append(cmd.Env, env...)
@@ -2344,7 +2377,7 @@ func (b *Builder) gccld(a *Action, p *load.Package, objdir, outfile string, flag
 
 	cmdargs := []interface{}{cmd, "-o", outfile, objs, flags}
 	dir := p.Dir
-	out, err := b.runOut(a, base.Cwd, b.cCompilerEnv(), cmdargs...)
+	out, err := b.runOut(a, base.Cwd(), b.cCompilerEnv(), cmdargs...)
 
 	if len(out) > 0 {
 		// Filter out useless linker warnings caused by bugs outside Go.
@@ -2436,7 +2469,7 @@ func (b *Builder) fcExe() []string {
 func (b *Builder) compilerExe(envValue string, def string) []string {
 	compiler := strings.Fields(envValue)
 	if len(compiler) == 0 {
-		compiler = []string{def}
+		compiler = strings.Fields(def)
 	}
 	return compiler
 }
@@ -2537,7 +2570,7 @@ func (b *Builder) gccSupportsFlag(compiler []string, flag string) bool {
 
 	tmp := os.DevNull
 	if runtime.GOOS == "windows" {
-		f, err := ioutil.TempFile(b.WorkDir, "")
+		f, err := os.CreateTemp(b.WorkDir, "")
 		if err != nil {
 			return false
 		}
@@ -2582,15 +2615,32 @@ func (b *Builder) gccArchArgs() []string {
 	case "386":
 		return []string{"-m32"}
 	case "amd64":
+		if cfg.Goos == "darwin" {
+			return []string{"-arch", "x86_64", "-m64"}
+		}
 		return []string{"-m64"}
+	case "arm64":
+		if cfg.Goos == "darwin" {
+			return []string{"-arch", "arm64"}
+		}
 	case "arm":
 		return []string{"-marm"} // not thumb
 	case "s390x":
 		return []string{"-m64", "-march=z196"}
 	case "mips64", "mips64le":
-		return []string{"-mabi=64"}
+		args := []string{"-mabi=64"}
+		if cfg.GOMIPS64 == "hardfloat" {
+			return append(args, "-mhard-float")
+		} else if cfg.GOMIPS64 == "softfloat" {
+			return append(args, "-msoft-float")
+		}
 	case "mips", "mipsle":
-		return []string{"-mabi=32", "-march=mips32"}
+		args := []string{"-mabi=32", "-march=mips32"}
+		if cfg.GOMIPS == "hardfloat" {
+			return append(args, "-mhard-float", "-mfp32", "-mno-odd-spreg")
+		} else if cfg.GOMIPS == "softfloat" {
+			return append(args, "-msoft-float")
+		}
 	case "ppc64":
 		if cfg.Goos == "aix" {
 			return []string{"-maix64"}
@@ -2710,7 +2760,7 @@ func (b *Builder) cgo(a *Action, cgoExe, objdir string, pcCFLAGS, pcLDFLAGS, cgo
 		for i, f := range cgoLDFLAGS {
 			flags[i] = strconv.Quote(f)
 		}
-		cgoenv = []string{"CGO_LDFLAGS=" + strings.Join(flags, " ")}
+		cgoenv = append(cgoenv, "CGO_LDFLAGS="+strings.Join(flags, " "))
 	}
 
 	if cfg.BuildToolchainName == "gccgo" {
@@ -2840,7 +2890,7 @@ func (b *Builder) cgo(a *Action, cgoExe, objdir string, pcCFLAGS, pcLDFLAGS, cgo
 				continue
 			}
 
-			src, err := ioutil.ReadFile(f)
+			src, err := os.ReadFile(f)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -2941,7 +2991,7 @@ func (b *Builder) dynimport(a *Action, p *load.Package, objdir, importGo, cgoExe
 	if p.Standard && p.ImportPath == "runtime/cgo" {
 		cgoflags = []string{"-dynlinker"} // record path to dynamic linker
 	}
-	return b.run(a, base.Cwd, p.ImportPath, b.cCompilerEnv(), cfg.BuildToolexec, cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
+	return b.run(a, base.Cwd(), p.ImportPath, b.cCompilerEnv(), cfg.BuildToolexec, cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
 }
 
 // Run SWIG on all SWIG input files.
@@ -3070,12 +3120,12 @@ func (b *Builder) swigDoIntSize(objdir string) (intsize string, err error) {
 		return "$INTBITS", nil
 	}
 	src := filepath.Join(b.WorkDir, "swig_intsize.go")
-	if err = ioutil.WriteFile(src, []byte(swigIntSizeCode), 0666); err != nil {
+	if err = os.WriteFile(src, []byte(swigIntSizeCode), 0666); err != nil {
 		return
 	}
 	srcs := []string{src}
 
-	p := load.GoFilesPackage(context.TODO(), srcs)
+	p := load.GoFilesPackage(context.TODO(), load.PackageOpts{}, srcs)
 
 	if _, _, e := BuildToolchain.gc(b, &Action{Mode: "swigDoIntSize", Package: p, Objdir: objdir}, "", nil, nil, "", false, srcs); e != nil {
 		return "32", nil
@@ -3230,14 +3280,14 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 		return
 	}
 
-	tf, err := ioutil.TempFile("", "args")
+	tf, err := os.CreateTemp("", "args")
 	if err != nil {
 		log.Fatalf("error writing long arguments to response file: %v", err)
 	}
 	cleanup = func() { os.Remove(tf.Name()) }
 	var buf bytes.Buffer
 	for _, arg := range cmd.Args[1:] {
-		fmt.Fprintf(&buf, "%s\n", arg)
+		fmt.Fprintf(&buf, "%s\n", encodeArg(arg))
 	}
 	if _, err := tf.Write(buf.Bytes()); err != nil {
 		tf.Close()
@@ -3252,6 +3302,12 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 	return cleanup
 }
 
+// Windows has a limit of 32 KB arguments. To be conservative and not worry
+// about whether that includes spaces or not, just use 30 KB. Darwin's limit is
+// less clear. The OS claims 256KB, but we've seen failures with arglen as
+// small as 50KB.
+const ArgLengthForResponseFile = (30 << 10)
+
 func useResponseFile(path string, argLen int) bool {
 	// Unless the program uses objabi.Flagparse, which understands
 	// response files, don't use response files.
@@ -3263,11 +3319,7 @@ func useResponseFile(path string, argLen int) bool {
 		return false
 	}
 
-	// Windows has a limit of 32 KB arguments. To be conservative and not
-	// worry about whether that includes spaces or not, just use 30 KB.
-	// Darwin's limit is less clear. The OS claims 256KB, but we've seen
-	// failures with arglen as small as 50KB.
-	if argLen > (30 << 10) {
+	if argLen > ArgLengthForResponseFile {
 		return true
 	}
 
@@ -3279,4 +3331,26 @@ func useResponseFile(path string, argLen int) bool {
 	}
 
 	return false
+}
+
+// encodeArg encodes an argument for response file writing.
+func encodeArg(arg string) string {
+	// If there aren't any characters we need to reencode, fastpath out.
+	if !strings.ContainsAny(arg, "\\\n") {
+		return arg
+	}
+	var b strings.Builder
+	for _, r := range arg {
+		switch r {
+		case '\\':
+			b.WriteByte('\\')
+			b.WriteByte('\\')
+		case '\n':
+			b.WriteByte('\\')
+			b.WriteByte('n')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

@@ -23,6 +23,8 @@ type timer struct {
 	// Timer wakes up at when, and then at when+period, ... (period > 0 only)
 	// each time calling f(arg, now) in the timer goroutine, so f must be
 	// a well-behaved function and not block.
+	//
+	// when must be positive on an active timer.
 	when   int64
 	period int64
 	f      func(interface{}, uintptr) // 计时器到时间时调用的函数
@@ -193,6 +195,9 @@ func timeSleep(ns int64) {
 	t.f = goroutineReady
 	t.arg = gp
 	t.nextwhen = nanotime() + ns
+	if t.nextwhen < 0 { // check for overflow.
+		t.nextwhen = maxWhen
+	}
 	gopark(resetForSleep, unsafe.Pointer(t), waitReasonSleep, traceEvGoSleep, 1)
 }
 
@@ -250,10 +255,14 @@ func goroutineReady(arg interface{}, seq uintptr) {
 // That avoids the risk of changing the when field of a timer in some P's heap,
 // which could cause the heap to become unsorted.
 func addtimer(t *timer) {
-	// when must never be negative; otherwise runtimer will overflow
-	// during its delta calculation and never expire other runtime timers.
-	if t.when < 0 {
-		t.when = maxWhen
+	// when must be positive. A negative value will cause runtimer to
+	// overflow during its delta calculation and never expire other runtime
+	// timers. Zero will cause checkTimers to fail to notice the timer.
+	if t.when <= 0 {
+		throw("timer when must be positive")
+	}
+	if t.period < 0 {
+		throw("timer period must be non-negative")
 	}
 	if t.status != timerNoStatus {
 		throw("addtimer called with initialized timer")
@@ -261,6 +270,9 @@ func addtimer(t *timer) {
 	t.status = timerWaiting
 
 	when := t.when
+
+	// Disable preemption while using pp to avoid changing another P's heap.
+	mp := acquirem()
 
 	pp := getg().m.p.ptr()
 	lock(&pp.timersLock)
@@ -270,6 +282,8 @@ func addtimer(t *timer) {
 
 	// 唤醒网络轮询器中的线程
 	wakeNetPoller(when)
+
+	releasem(mp)
 }
 
 // doaddtimer adds t to the current P's heap.
@@ -417,8 +431,11 @@ func dodeltimer0(pp *p) {
 // This is called by the netpoll code or time.Ticker.Reset or time.Timer.Reset.
 // Reports whether the timer was modified before it was run.
 func modtimer(t *timer, when, period int64, f func(interface{}, uintptr), arg interface{}, seq uintptr) bool {
-	if when < 0 {
-		when = maxWhen
+	if when <= 0 {
+		throw("timer when must be positive")
+	}
+	if period < 0 {
+		throw("timer period must be non-negative")
 	}
 
 	status := uint32(timerNoStatus)
@@ -608,8 +625,14 @@ func moveTimers(pp *p, timers []*timer) {
 		for {
 			switch s := atomic.Load(&t.status); s {
 			case timerWaiting:
+				if !atomic.Cas(&t.status, s, timerMoving) {
+					continue
+				}
 				t.pp = 0
 				doaddtimer(pp, t)
+				if !atomic.Cas(&t.status, timerMoving, timerWaiting) {
+					badTimer()
+				}
 				break loop
 			case timerModifiedEarlier, timerModifiedLater:
 				if !atomic.Cas(&t.status, s, timerMoving) {
@@ -858,6 +881,9 @@ func runOneTimer(pp *p, t *timer, now int64) {
 		// Leave in heap but adjust next time to fire.
 		delta := t.when - now
 		t.when += t.period * (1 + -delta/t.period)
+		if t.when < 0 { // check for overflow.
+			t.when = maxWhen
+		}
 		siftdownTimer(pp.timers, 0)
 		if !atomic.Cas(&t.status, timerRunning, timerWaiting) {
 			badTimer()
@@ -1076,6 +1102,9 @@ func siftupTimer(t []*timer, i int) {
 		badTimer()
 	}
 	when := t[i].when
+	if when <= 0 {
+		badTimer()
+	}
 	tmp := t[i]
 	for i > 0 {
 		p := (i - 1) / 4 // parent
@@ -1096,6 +1125,9 @@ func siftdownTimer(t []*timer, i int) {
 		badTimer()
 	}
 	when := t[i].when
+	if when <= 0 {
+		badTimer()
+	}
 	tmp := t[i]
 	for {
 		c := i*4 + 1 // left child

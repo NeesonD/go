@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build msan
 // +build msan
 
 #include "go_asm.h"
@@ -9,6 +10,7 @@
 
 #define RARG0 R0
 #define RARG1 R1
+#define RARG2 R2
 #define FARG R3
 
 // func runtime·domsanread(addr unsafe.Pointer, sz uintptr)
@@ -43,6 +45,15 @@ TEXT	runtime·msanfree(SB), NOSPLIT, $0-16
 	MOVD	size+8(FP), RARG1
 	// void __msan_free_go(void *addr, uintptr_t sz);
 	MOVD	$__msan_free_go(SB), FARG
+	JMP	msancall<>(SB)
+
+// func runtime·msanmove(dst, src unsafe.Pointer, sz uintptr)
+TEXT	runtime·msanmove(SB), NOSPLIT, $0-24
+	MOVD	dst+0(FP), RARG0
+	MOVD	src+8(FP), RARG1
+	MOVD	size+16(FP), RARG2
+	// void __msan_memmove(void *dst, void *src, uintptr_t sz);
+	MOVD	$__msan_memmove(SB), FARG
 	JMP	msancall<>(SB)
 
 // Switches SP to g0 stack and calls (FARG). Arguments already set.

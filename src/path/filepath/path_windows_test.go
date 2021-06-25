@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"internal/testenv"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,12 +37,7 @@ func testWinSplitListTestIsValid(t *testing.T, ti int, tt SplitListTest,
 		perm    fs.FileMode = 0700
 	)
 
-	tmp, err := ioutil.TempDir("", "testWinSplitListTestIsValid")
-	if err != nil {
-		t.Fatalf("TempDir failed: %v", err)
-	}
-	defer os.RemoveAll(tmp)
-
+	tmp := t.TempDir()
 	for i, d := range tt.result {
 		if d == "" {
 			continue
@@ -58,12 +52,12 @@ func testWinSplitListTestIsValid(t *testing.T, ti int, tt SplitListTest,
 			t.Errorf("%d,%d: %#q already exists", ti, i, d)
 			return
 		}
-		if err = os.MkdirAll(dd, perm); err != nil {
+		if err := os.MkdirAll(dd, perm); err != nil {
 			t.Errorf("%d,%d: MkdirAll(%#q) failed: %v", ti, i, dd, err)
 			return
 		}
 		fn, data := filepath.Join(dd, cmdfile), []byte("@echo "+d+"\r\n")
-		if err = ioutil.WriteFile(fn, data, perm); err != nil {
+		if err := os.WriteFile(fn, data, perm); err != nil {
 			t.Errorf("%d,%d: WriteFile(%#q) failed: %v", ti, i, fn, err)
 			return
 		}
@@ -104,18 +98,7 @@ func testWinSplitListTestIsValid(t *testing.T, ti int, tt SplitListTest,
 func TestWindowsEvalSymlinks(t *testing.T) {
 	testenv.MustHaveSymlink(t)
 
-	tmpDir, err := ioutil.TempDir("", "TestWindowsEvalSymlinks")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// /tmp may itself be a symlink! Avoid the confusion, although
-	// it means trusting the thing we're testing.
-	tmpDir, err = filepath.EvalSymlinks(tmpDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmpDir := tempDirCanonical(t)
 
 	if len(tmpDir) < 3 {
 		t.Fatalf("tmpDir path %q is too short", tmpDir)
@@ -162,18 +145,7 @@ func TestWindowsEvalSymlinks(t *testing.T) {
 // TestEvalSymlinksCanonicalNames verify that EvalSymlinks
 // returns "canonical" path names on windows.
 func TestEvalSymlinksCanonicalNames(t *testing.T) {
-	tmp, err := ioutil.TempDir("", "evalsymlinkcanonical")
-	if err != nil {
-		t.Fatal("creating temp dir:", err)
-	}
-	defer os.RemoveAll(tmp)
-
-	// ioutil.TempDir might return "non-canonical" name.
-	cTmpName, err := filepath.EvalSymlinks(tmp)
-	if err != nil {
-		t.Errorf("EvalSymlinks(%q) error: %v", tmp, err)
-	}
-
+	ctmp := tempDirCanonical(t)
 	dirs := []string{
 		"test",
 		"test/dir",
@@ -182,7 +154,7 @@ func TestEvalSymlinksCanonicalNames(t *testing.T) {
 	}
 
 	for _, d := range dirs {
-		dir := filepath.Join(cTmpName, d)
+		dir := filepath.Join(ctmp, d)
 		err := os.Mkdir(dir, 0755)
 		if err != nil {
 			t.Fatal(err)
@@ -418,25 +390,8 @@ func TestToNorm(t *testing.T) {
 		{".", `\\localhost\c$`, `\\localhost\c$`},
 	}
 
-	tmp, err := ioutil.TempDir("", "testToNorm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		err := os.RemoveAll(tmp)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}()
-
-	// ioutil.TempDir might return "non-canonical" name.
-	ctmp, err := filepath.EvalSymlinks(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = os.MkdirAll(strings.ReplaceAll(testPath, "{{tmp}}", ctmp), 0777)
-	if err != nil {
+	ctmp := tempDirCanonical(t)
+	if err := os.MkdirAll(strings.ReplaceAll(testPath, "{{tmp}}", ctmp), 0777); err != nil {
 		t.Fatal(err)
 	}
 
@@ -527,20 +482,10 @@ func TestNTNamespaceSymlink(t *testing.T) {
 		t.Skip("skipping test because mklink command does not support junctions")
 	}
 
-	tmpdir, err := ioutil.TempDir("", "TestNTNamespaceSymlink")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpdir)
-
-	// Make sure tmpdir is not a symlink, otherwise tests will fail.
-	tmpdir, err = filepath.EvalSymlinks(tmpdir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tmpdir := tempDirCanonical(t)
 
 	vol := filepath.VolumeName(tmpdir)
-	output, err = exec.Command("cmd", "/c", "mountvol", vol, "/L").CombinedOutput()
+	output, err := exec.Command("cmd", "/c", "mountvol", vol, "/L").CombinedOutput()
 	if err != nil {
 		t.Fatalf("failed to run mountvol %v /L: %v %q", vol, err, output)
 	}
@@ -564,7 +509,7 @@ func TestNTNamespaceSymlink(t *testing.T) {
 	testenv.MustHaveSymlink(t)
 
 	file := filepath.Join(tmpdir, "file")
-	err = ioutil.WriteFile(file, []byte(""), 0666)
+	err = os.WriteFile(file, []byte(""), 0666)
 	if err != nil {
 		t.Fatal(err)
 	}

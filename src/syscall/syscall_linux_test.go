@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,7 +30,7 @@ func chtmpdir(t *testing.T) func() {
 	if err != nil {
 		t.Fatalf("chtmpdir: %v", err)
 	}
-	d, err := ioutil.TempDir("", "test")
+	d, err := os.MkdirTemp("", "test")
 	if err != nil {
 		t.Fatalf("chtmpdir: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestLinuxDeathSignal(t *testing.T) {
 
 	// Copy the test binary to a location that a non-root user can read/execute
 	// after we drop privileges
-	tempDir, err := ioutil.TempDir("", "TestDeathSignal")
+	tempDir, err := os.MkdirTemp("", "TestDeathSignal")
 	if err != nil {
 		t.Fatalf("cannot create temporary directory: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestSyscallNoError(t *testing.T) {
 
 	// Copy the test binary to a location that a non-root user can read/execute
 	// after we drop privileges
-	tempDir, err := ioutil.TempDir("", "TestSyscallNoError")
+	tempDir, err := os.MkdirTemp("", "TestSyscallNoError")
 	if err != nil {
 		t.Fatalf("cannot create temporary directory: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestAllThreadsSyscall(t *testing.T) {
 func compareStatus(filter, expect string) error {
 	expected := filter + expect
 	pid := syscall.Getpid()
-	fs, err := ioutil.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	fs, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
 	if err != nil {
 		return fmt.Errorf("unable to find %d tasks: %v", pid, err)
 	}
@@ -551,7 +551,7 @@ func compareStatus(filter, expect string) error {
 	foundAThread := false
 	for _, f := range fs {
 		tf := fmt.Sprintf("/proc/%s/status", f.Name())
-		d, err := ioutil.ReadFile(tf)
+		d, err := os.ReadFile(tf)
 		if err != nil {
 			// There are a surprising number of ways this
 			// can error out on linux.  We've seen all of
@@ -584,11 +584,23 @@ func compareStatus(filter, expect string) error {
 				// "Pid:\t".
 			}
 			if strings.HasPrefix(line, filter) {
-				if line != expected {
-					return fmt.Errorf("%q got:%q want:%q (bad) [pid=%d file:'%s' %v]\n", tf, line, expected, pid, string(d), expectedProc)
+				if line == expected {
+					foundAThread = true
+					break
 				}
-				foundAThread = true
-				break
+				if filter == "Groups:" && strings.HasPrefix(line, "Groups:\t") {
+					// https://github.com/golang/go/issues/46145
+					// Containers don't reliably output this line in sorted order so manually sort and compare that.
+					a := strings.Split(line[8:], " ")
+					sort.Strings(a)
+					got := strings.Join(a, " ")
+					if got == expected[8:] {
+						foundAThread = true
+						break
+					}
+
+				}
+				return fmt.Errorf("%q got:%q want:%q (bad) [pid=%d file:'%s' %v]\n", tf, line, expected, pid, string(d), expectedProc)
 			}
 		}
 	}
@@ -596,6 +608,14 @@ func compareStatus(filter, expect string) error {
 		return fmt.Errorf("found no thread /proc/<TID>/status files for process %q", expectedProc)
 	}
 	return nil
+}
+
+// killAThread locks the goroutine to an OS thread and exits; this
+// causes an OS thread to terminate.
+func killAThread(c <-chan struct{}) {
+	runtime.LockOSThread()
+	<-c
+	return
 }
 
 // TestSetuidEtc performs tests on all of the wrapped system calls
@@ -648,6 +668,11 @@ func TestSetuidEtc(t *testing.T) {
 	}
 
 	for i, v := range vs {
+		// Generate some thread churn as we execute the tests.
+		c := make(chan struct{})
+		go killAThread(c)
+		close(c)
+
 		if err := v.fn(); err != nil {
 			t.Errorf("[%d] %q failed: %v", i, v.call, err)
 			continue

@@ -297,6 +297,8 @@ func rewriteValueMIPS(v *Value) bool {
 		return rewriteValueMIPS_OpMIPSMOVHstorezero(v)
 	case OpMIPSMOVWload:
 		return rewriteValueMIPS_OpMIPSMOVWload(v)
+	case OpMIPSMOVWnop:
+		return rewriteValueMIPS_OpMIPSMOVWnop(v)
 	case OpMIPSMOVWreg:
 		return rewriteValueMIPS_OpMIPSMOVWreg(v)
 	case OpMIPSMOVWstore:
@@ -513,6 +515,9 @@ func rewriteValueMIPS(v *Value) bool {
 		return rewriteValueMIPS_OpSlicemask(v)
 	case OpSqrt:
 		v.Op = OpMIPSSQRTD
+		return true
+	case OpSqrt32:
+		v.Op = OpMIPSSQRTF
 		return true
 	case OpStaticCall:
 		v.Op = OpMIPSCALLstatic
@@ -867,12 +872,12 @@ func rewriteValueMIPS_OpConst8(v *Value) bool {
 	}
 }
 func rewriteValueMIPS_OpConstBool(v *Value) bool {
-	// match: (ConstBool [b])
-	// result: (MOVWconst [b2i32(b)])
+	// match: (ConstBool [t])
+	// result: (MOVWconst [b2i32(t)])
 	for {
-		b := auxIntToBool(v.AuxInt)
+		t := auxIntToBool(v.AuxInt)
 		v.reset(OpMIPSMOVWconst)
-		v.AuxInt = int32ToAuxInt(b2i32(b))
+		v.AuxInt = int32ToAuxInt(b2i32(t))
 		return true
 	}
 }
@@ -3643,6 +3648,21 @@ func rewriteValueMIPS_OpMIPSMOVWload(v *Value) bool {
 			break
 		}
 		v.copyOf(x)
+		return true
+	}
+	return false
+}
+func rewriteValueMIPS_OpMIPSMOVWnop(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (MOVWnop (MOVWconst [c]))
+	// result: (MOVWconst [c])
+	for {
+		if v_0.Op != OpMIPSMOVWconst {
+			break
+		}
+		c := auxIntToInt32(v_0.AuxInt)
+		v.reset(OpMIPSMOVWconst)
+		v.AuxInt = int32ToAuxInt(c)
 		return true
 	}
 	return false
@@ -6421,6 +6441,7 @@ func rewriteValueMIPS_OpSelect0(v *Value) bool {
 		break
 	}
 	// match: (Select0 (DIV (MOVWconst [c]) (MOVWconst [d])))
+	// cond: d != 0
 	// result: (MOVWconst [c%d])
 	for {
 		if v_0.Op != OpMIPSDIV {
@@ -6437,11 +6458,15 @@ func rewriteValueMIPS_OpSelect0(v *Value) bool {
 			break
 		}
 		d := auxIntToInt32(v_0_1.AuxInt)
+		if !(d != 0) {
+			break
+		}
 		v.reset(OpMIPSMOVWconst)
 		v.AuxInt = int32ToAuxInt(c % d)
 		return true
 	}
 	// match: (Select0 (DIVU (MOVWconst [c]) (MOVWconst [d])))
+	// cond: d != 0
 	// result: (MOVWconst [int32(uint32(c)%uint32(d))])
 	for {
 		if v_0.Op != OpMIPSDIVU {
@@ -6458,6 +6483,9 @@ func rewriteValueMIPS_OpSelect0(v *Value) bool {
 			break
 		}
 		d := auxIntToInt32(v_0_1.AuxInt)
+		if !(d != 0) {
+			break
+		}
 		v.reset(OpMIPSMOVWconst)
 		v.AuxInt = int32ToAuxInt(int32(uint32(c) % uint32(d)))
 		return true
@@ -6609,6 +6637,7 @@ func rewriteValueMIPS_OpSelect1(v *Value) bool {
 		break
 	}
 	// match: (Select1 (DIV (MOVWconst [c]) (MOVWconst [d])))
+	// cond: d != 0
 	// result: (MOVWconst [c/d])
 	for {
 		if v_0.Op != OpMIPSDIV {
@@ -6625,11 +6654,15 @@ func rewriteValueMIPS_OpSelect1(v *Value) bool {
 			break
 		}
 		d := auxIntToInt32(v_0_1.AuxInt)
+		if !(d != 0) {
+			break
+		}
 		v.reset(OpMIPSMOVWconst)
 		v.AuxInt = int32ToAuxInt(c / d)
 		return true
 	}
 	// match: (Select1 (DIVU (MOVWconst [c]) (MOVWconst [d])))
+	// cond: d != 0
 	// result: (MOVWconst [int32(uint32(c)/uint32(d))])
 	for {
 		if v_0.Op != OpMIPSDIVU {
@@ -6646,6 +6679,9 @@ func rewriteValueMIPS_OpSelect1(v *Value) bool {
 			break
 		}
 		d := auxIntToInt32(v_0_1.AuxInt)
+		if !(d != 0) {
+			break
+		}
 		v.reset(OpMIPSMOVWconst)
 		v.AuxInt = int32ToAuxInt(int32(uint32(c) / uint32(d)))
 		return true

@@ -91,7 +91,7 @@ func init() {
 func Cmdline(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, strings.Join(os.Args, "\x00"))
+	fmt.Fprint(w, strings.Join(os.Args, "\x00"))
 }
 
 func sleep(r *http.Request, d time.Duration) {
@@ -287,7 +287,7 @@ func (name handler) serveDeltaProfile(w http.ResponseWriter, r *http.Request, p 
 		err := r.Context().Err()
 		if err == context.DeadlineExceeded {
 			serveError(w, http.StatusRequestTimeout, err.Error())
-		} else { // TODO: what's a good status code for cancelled requests? 400?
+		} else { // TODO: what's a good status code for canceled requests? 400?
 			serveError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
@@ -431,7 +431,7 @@ Types of profiles available:
 
 	b.WriteString(`</table>
 <a href="goroutine?debug=2">full goroutine stack dump</a>
-<br/>
+<br>
 <p>
 Profile Descriptions:
 <ul>

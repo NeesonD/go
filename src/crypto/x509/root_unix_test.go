@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build dragonfly || freebsd || linux || netbsd || openbsd || solaris
 // +build dragonfly freebsd linux netbsd openbsd solaris
 
 package x509
@@ -9,7 +10,6 @@ package x509
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -147,11 +147,7 @@ func TestLoadSystemCertsLoadColonSeparatedDirs(t *testing.T) {
 		os.Setenv(certFileEnv, origFile)
 	}()
 
-	tmpDir, err := ioutil.TempDir(os.TempDir(), "x509-issue35325")
-	if err != nil {
-		t.Fatalf("Failed to create temporary directory: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	rootPEMs := []string{
 		geoTrustRoot,
@@ -166,7 +162,7 @@ func TestLoadSystemCertsLoadColonSeparatedDirs(t *testing.T) {
 			t.Fatalf("Failed to create certificate dir: %v", err)
 		}
 		certOutFile := filepath.Join(certDir, "cert.crt")
-		if err := ioutil.WriteFile(certOutFile, []byte(certPEM), 0655); err != nil {
+		if err := os.WriteFile(certOutFile, []byte(certPEM), 0655); err != nil {
 			t.Fatalf("Failed to write certificate to file: %v", err)
 		}
 		certDirs = append(certDirs, certDir)

@@ -132,6 +132,16 @@ func (fsys MapFS) Glob(pattern string) ([]string, error) {
 	return fs.Glob(fsOnly{fsys}, pattern)
 }
 
+type noSub struct {
+	MapFS
+}
+
+func (noSub) Sub() {} // not the fs.SubFS signature
+
+func (fsys MapFS) Sub(dir string) (fs.FS, error) {
+	return fs.Sub(noSub{fsys}, dir)
+}
+
 // A mapFileInfo implements fs.FileInfo and fs.DirEntry for a given map file.
 type mapFileInfo struct {
 	name string
@@ -213,11 +223,11 @@ func (d *mapDir) Read(b []byte) (int, error) {
 
 func (d *mapDir) ReadDir(count int) ([]fs.DirEntry, error) {
 	n := len(d.entry) - d.offset
-	if count > 0 && n > count {
-		n = count
-	}
 	if n == 0 && count > 0 {
 		return nil, io.EOF
+	}
+	if count > 0 && n > count {
+		n = count
 	}
 	list := make([]fs.DirEntry, n)
 	for i := range list {

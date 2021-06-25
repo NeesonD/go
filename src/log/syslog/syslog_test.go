@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !windows && !plan9 && !js
 // +build !windows,!plan9,!js
 
 package syslog
@@ -10,7 +11,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -88,8 +88,8 @@ func startServer(n, la string, done chan<- string) (addr string, sock io.Closer,
 	} else {
 		// unix and unixgram: choose an address if none given
 		if la == "" {
-			// use ioutil.TempFile to get a name that is unique
-			f, err := ioutil.TempFile("", "syslogtest")
+			// use os.CreateTemp to get a name that is unique
+			f, err := os.CreateTemp("", "syslogtest")
 			if err != nil {
 				log.Fatal("TempFile: ", err)
 			}

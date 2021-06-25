@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -79,7 +78,7 @@ func TestServeFile(t *testing.T) {
 
 	var err error
 
-	file, err := ioutil.ReadFile(testFile)
+	file, err := os.ReadFile(testFile)
 	if err != nil {
 		t.Fatal("reading file:", err)
 	}
@@ -379,12 +378,8 @@ func mustRemoveAll(dir string) {
 
 func TestFileServerImplicitLeadingSlash(t *testing.T) {
 	defer afterTest(t)
-	tempDir, err := ioutil.TempDir("", "")
-	if err != nil {
-		t.Fatalf("TempDir: %v", err)
-	}
-	defer mustRemoveAll(tempDir)
-	if err := ioutil.WriteFile(filepath.Join(tempDir, "foo.txt"), []byte("Hello world"), 0644); err != nil {
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "foo.txt"), []byte("Hello world"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	ts := httptest.NewServer(StripPrefix("/bar/", FileServer(Dir(tempDir))))
@@ -593,7 +588,7 @@ func TestServeIndexHtml(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				b, err := ioutil.ReadAll(res.Body)
+				b, err := io.ReadAll(res.Body)
 				if err != nil {
 					t.Fatal("reading Body:", err)
 				}
@@ -1177,7 +1172,7 @@ func TestLinuxSendfile(t *testing.T) {
 	filename := fmt.Sprintf("1kb-%d", os.Getpid())
 	filepath := path.Join(os.TempDir(), filename)
 
-	if err := ioutil.WriteFile(filepath, bytes.Repeat([]byte{'a'}, 1<<10), 0755); err != nil {
+	if err := os.WriteFile(filepath, bytes.Repeat([]byte{'a'}, 1<<10), 0755); err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(filepath)
@@ -1270,16 +1265,18 @@ func TestFileServerNotDirError(t *testing.T) {
 			if err == nil {
 				t.Fatal("err == nil; want != nil")
 			}
-			if !os.IsNotExist(err) {
-				t.Errorf("err = %v; os.IsNotExist(err) = %v; want true", err, os.IsNotExist(err))
+			if !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("err = %v; errors.Is(err, fs.ErrNotExist) = %v; want true", err,
+					errors.Is(err, fs.ErrNotExist))
 			}
 
 			_, err = dir.Open("/index.html/not-a-dir/not-a-file")
 			if err == nil {
 				t.Fatal("err == nil; want != nil")
 			}
-			if !os.IsNotExist(err) {
-				t.Errorf("err = %v; os.IsNotExist(err) = %v; want true", err, os.IsNotExist(err))
+			if !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("err = %v; errors.Is(err, fs.ErrNotExist) = %v; want true", err,
+					errors.Is(err, fs.ErrNotExist))
 			}
 		})
 	}

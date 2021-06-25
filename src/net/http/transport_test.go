@@ -23,7 +23,6 @@ import (
 	"go/token"
 	"internal/nettrace"
 	"io"
-	"io/ioutil"
 	"log"
 	mrand "math/rand"
 	"net"
@@ -31,7 +30,7 @@ import (
 	"net/http/httptest"
 	"net/http/httptrace"
 	"net/http/httputil"
-	"net/http/internal"
+	"net/http/internal/testcert"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -627,12 +626,15 @@ func TestTransportMaxConnsPerHost(t *testing.T) {
 			t.Fatalf("ExportHttp2ConfigureTransport: %v", err)
 		}
 
-		connCh := make(chan net.Conn, 1)
+		mu := sync.Mutex{}
+		var conns []net.Conn
 		var dialCnt, gotConnCnt, tlsHandshakeCnt int32
 		tr.Dial = func(network, addr string) (net.Conn, error) {
 			atomic.AddInt32(&dialCnt, 1)
 			c, err := net.Dial(network, addr)
-			connCh <- c
+			mu.Lock()
+			defer mu.Unlock()
+			conns = append(conns, c)
 			return c, err
 		}
 
@@ -686,7 +688,12 @@ func TestTransportMaxConnsPerHost(t *testing.T) {
 			t.FailNow()
 		}
 
-		(<-connCh).Close()
+		mu.Lock()
+		for _, c := range conns {
+			c.Close()
+		}
+		conns = nil
+		mu.Unlock()
 		tr.CloseIdleConnections()
 
 		doReq()
@@ -4292,7 +4299,7 @@ func TestTransportReuseConnEmptyResponseBody(t *testing.T) {
 
 // Issue 13839
 func TestNoCrashReturningTransportAltConn(t *testing.T) {
-	cert, err := tls.X509KeyPair(internal.LocalhostCert, internal.LocalhostKey)
+	cert, err := tls.X509KeyPair(testcert.LocalhostCert, testcert.LocalhostKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5315,7 +5322,6 @@ func TestMissingStatusNoPanic(t *testing.T) {
 
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
-	shutdown := make(chan bool, 1)
 	done := make(chan bool)
 	fullAddrURL := fmt.Sprintf("http://%s", addr)
 	raw := "HTTP/1.1 400\r\n" +
@@ -5327,10 +5333,7 @@ func TestMissingStatusNoPanic(t *testing.T) {
 		"Aloha Olaa"
 
 	go func() {
-		defer func() {
-			ln.Close()
-			close(done)
-		}()
+		defer close(done)
 
 		conn, _ := ln.Accept()
 		if conn != nil {
@@ -5361,7 +5364,7 @@ func TestMissingStatusNoPanic(t *testing.T) {
 		t.Errorf("got=%v want=%q", err, want)
 	}
 
-	close(shutdown)
+	ln.Close()
 	<-done
 }
 
@@ -5746,7 +5749,7 @@ func (c *testMockTCPConn) ReadFrom(r io.Reader) (int64, error) {
 func TestTransportRequestWriteRoundTrip(t *testing.T) {
 	nBytes := int64(1 << 10)
 	newFileFunc := func() (r io.Reader, done func(), err error) {
-		f, err := ioutil.TempFile("", "net-http-newfilefunc")
+		f, err := os.CreateTemp("", "net-http-newfilefunc")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -6432,4 +6435,55 @@ func TestErrorWriteLoopRace(t *testing.T) {
 
 		testTransportRace(req)
 	}
+}
+
+// Issue 41600
+// Test that a new request which uses the connection of an active request
+// cannot cause it to be canceled as well.
+func TestCancelRequestWhenSharingConnection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	ts := httptest.NewServer(HandlerFunc(func(w ResponseWriter, req *Request) {
+		w.Header().Add("Content-Length", "0")
+	}))
+	defer ts.Close()
+
+	client := ts.Client()
+	transport := client.Transport.(*Transport)
+	transport.MaxIdleConns = 1
+	transport.MaxConnsPerHost = 1
+
+	var wg sync.WaitGroup
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				reqctx, reqcancel := context.WithCancel(ctx)
+				go reqcancel()
+				req, _ := NewRequestWithContext(reqctx, "GET", ts.URL, nil)
+				res, err := client.Do(req)
+				if err == nil {
+					res.Body.Close()
+				}
+			}
+		}()
+	}
+
+	for ctx.Err() == nil {
+		req, _ := NewRequest("GET", ts.URL, nil)
+		if res, err := client.Do(req); err != nil {
+			t.Errorf("unexpected: %p %v", req, err)
+			break
+		} else {
+			res.Body.Close()
+		}
+	}
+
+	cancel()
+	wg.Wait()
 }

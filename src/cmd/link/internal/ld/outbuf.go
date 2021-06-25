@@ -113,6 +113,7 @@ func (out *OutBuf) Close() error {
 	}
 	if out.isMmapped() {
 		out.copyHeap()
+		out.purgeSignatureCache()
 		out.munmap()
 	}
 	if out.f == nil {
@@ -135,6 +136,15 @@ func (out *OutBuf) isMmapped() bool {
 	return len(out.buf) != 0
 }
 
+// Data returns the whole written OutBuf as a byte slice.
+func (out *OutBuf) Data() []byte {
+	if out.isMmapped() {
+		out.copyHeap()
+		return out.buf
+	}
+	return out.heap
+}
+
 // copyHeap copies the heap to the mmapped section of memory, returning true if
 // a copy takes place.
 func (out *OutBuf) copyHeap() bool {
@@ -150,7 +160,7 @@ func (out *OutBuf) copyHeap() bool {
 	total := uint64(bufLen + heapLen)
 	if heapLen != 0 {
 		if err := out.Mmap(total); err != nil { // Mmap will copy out.heap over to out.buf
-			panic(err)
+			Exitf("mapping output file failed: %v", err)
 		}
 	}
 	return true

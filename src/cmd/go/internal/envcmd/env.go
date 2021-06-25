@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/build"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -200,7 +200,7 @@ func runEnv(ctx context.Context, cmd *base.Command, args []string) {
 	env := cfg.CmdEnv
 	env = append(env, ExtraEnvVars()...)
 
-	if err := fsys.Init(base.Cwd); err != nil {
+	if err := fsys.Init(base.Cwd()); err != nil {
 		base.Fatalf("go: %v", err)
 	}
 
@@ -348,27 +348,32 @@ func runEnv(ctx context.Context, cmd *base.Command, args []string) {
 		return
 	}
 
+	PrintEnv(os.Stdout, env)
+}
+
+// PrintEnv prints the environment variables to w.
+func PrintEnv(w io.Writer, env []cfg.EnvVar) {
 	for _, e := range env {
 		if e.Name != "TERM" {
 			switch runtime.GOOS {
 			default:
-				fmt.Printf("%s=\"%s\"\n", e.Name, e.Value)
+				fmt.Fprintf(w, "%s=\"%s\"\n", e.Name, e.Value)
 			case "plan9":
 				if strings.IndexByte(e.Value, '\x00') < 0 {
-					fmt.Printf("%s='%s'\n", e.Name, strings.ReplaceAll(e.Value, "'", "''"))
+					fmt.Fprintf(w, "%s='%s'\n", e.Name, strings.ReplaceAll(e.Value, "'", "''"))
 				} else {
 					v := strings.Split(e.Value, "\x00")
-					fmt.Printf("%s=(", e.Name)
+					fmt.Fprintf(w, "%s=(", e.Name)
 					for x, s := range v {
 						if x > 0 {
-							fmt.Printf(" ")
+							fmt.Fprintf(w, " ")
 						}
-						fmt.Printf("%s", s)
+						fmt.Fprintf(w, "%s", s)
 					}
-					fmt.Printf(")\n")
+					fmt.Fprintf(w, ")\n")
 				}
 			case "windows":
-				fmt.Printf("set %s=%s\n", e.Name, e.Value)
+				fmt.Fprintf(w, "set %s=%s\n", e.Name, e.Value)
 			}
 		}
 	}
@@ -429,7 +434,7 @@ func checkEnvWrite(key, val string) error {
 			return fmt.Errorf("GOPATH entry is relative; must be absolute path: %q", val)
 		}
 	// Make sure CC and CXX are absolute paths
-	case "CC", "CXX":
+	case "CC", "CXX", "GOMODCACHE":
 		if !filepath.IsAbs(val) && val != "" && val != filepath.Base(val) {
 			return fmt.Errorf("%s entry is relative; must be absolute path: %q", key, val)
 		}
@@ -452,7 +457,7 @@ func updateEnvFile(add map[string]string, del map[string]bool) {
 	if file == "" {
 		base.Fatalf("go env: cannot find go env config: %v", err)
 	}
-	data, err := ioutil.ReadFile(file)
+	data, err := os.ReadFile(file)
 	if err != nil && (!os.IsNotExist(err) || len(add) == 0) {
 		base.Fatalf("go env: reading go env config: %v", err)
 	}
@@ -506,11 +511,11 @@ func updateEnvFile(add map[string]string, del map[string]bool) {
 	}
 
 	data = []byte(strings.Join(lines, ""))
-	err = ioutil.WriteFile(file, data, 0666)
+	err = os.WriteFile(file, data, 0666)
 	if err != nil {
 		// Try creating directory.
 		os.MkdirAll(filepath.Dir(file), 0777)
-		err = ioutil.WriteFile(file, data, 0666)
+		err = os.WriteFile(file, data, 0666)
 		if err != nil {
 			base.Fatalf("go env: writing go env config: %v", err)
 		}

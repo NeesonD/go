@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build aix || darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris
 // +build aix darwin dragonfly freebsd linux netbsd openbsd solaris
 
 package syscall_test
@@ -11,7 +12,6 @@ import (
 	"fmt"
 	"internal/testenv"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -79,16 +79,12 @@ func TestFcntlFlock(t *testing.T) {
 	}
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "" {
 		// parent
-		tempDir, err := ioutil.TempDir("", "TestFcntlFlock")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
+		tempDir := t.TempDir()
 		name := filepath.Join(tempDir, "TestFcntlFlock")
 		fd, err := syscall.Open(name, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC, 0)
 		if err != nil {
 			t.Fatalf("Open failed: %v", err)
 		}
-		defer os.RemoveAll(tempDir)
 		defer syscall.Close(fd)
 		if err := syscall.Ftruncate(fd, 1<<20); err != nil {
 			t.Fatalf("Ftruncate(1<<20) failed: %v", err)
@@ -157,18 +153,12 @@ func TestPassFD(t *testing.T) {
 
 	}
 
-	tempDir, err := ioutil.TempDir("", "TestPassFD")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
+	tempDir := t.TempDir()
 
 	fds, err := syscall.Socketpair(syscall.AF_LOCAL, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		t.Fatalf("Socketpair: %v", err)
 	}
-	defer syscall.Close(fds[0])
-	defer syscall.Close(fds[1])
 	writeFile := os.NewFile(uintptr(fds[0]), "child-writes")
 	readFile := os.NewFile(uintptr(fds[1]), "parent-reads")
 	defer writeFile.Close()
@@ -257,7 +247,7 @@ func passFDChild() {
 	// We make it in tempDir, which our parent will clean up.
 	flag.Parse()
 	tempDir := flag.Arg(0)
-	f, err := ioutil.TempFile(tempDir, "")
+	f, err := os.CreateTemp(tempDir, "")
 	if err != nil {
 		fmt.Printf("TempFile: %v", err)
 		return

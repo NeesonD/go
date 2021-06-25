@@ -413,11 +413,7 @@ func elfreloc1(ctxt *ld.Link, out *ld.OutBuf, ldr *loader.Loader, s loader.Sym, 
 	case objabi.R_CALL:
 		if siz == 4 {
 			if ldr.SymType(r.Xsym) == sym.SDYNIMPORT {
-				if ctxt.DynlinkingGo() {
-					out.Write64(uint64(elf.R_X86_64_PLT32) | uint64(elfsym)<<32)
-				} else {
-					out.Write64(uint64(elf.R_X86_64_GOTPCREL) | uint64(elfsym)<<32)
-				}
+				out.Write64(uint64(elf.R_X86_64_PLT32) | uint64(elfsym)<<32)
 			} else {
 				out.Write64(uint64(elf.R_X86_64_PC32) | uint64(elfsym)<<32)
 			}
@@ -552,7 +548,7 @@ func archreloc(*ld.Target, *loader.Loader, *ld.ArchSyms, loader.Reloc, loader.Sy
 	return -1, 0, false
 }
 
-func archrelocvariant(*ld.Target, *loader.Loader, loader.Reloc, sym.RelocVariant, loader.Sym, int64) int64 {
+func archrelocvariant(*ld.Target, *loader.Loader, loader.Reloc, sym.RelocVariant, loader.Sym, int64, []byte) int64 {
 	log.Fatalf("unexpected relocation variant")
 	return -1
 }

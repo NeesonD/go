@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"io/ioutil"
 	"path"
 	"reflect"
 	"sort"
@@ -22,6 +21,9 @@ import (
 // It walks the entire tree of files in fsys,
 // opening and checking that each file behaves correctly.
 // It also checks that the file system contains at least the expected files.
+// As a special case, if no expected files are listed, fsys must be empty.
+// Otherwise, fsys must contain at least the listed files; it can also contain others.
+// The contents of fsys must not change concurrently with TestFS.
 //
 // If TestFS finds any misbehaviors, it returns an error reporting all of them.
 // The error text spans multiple lines, one per detected misbehavior.
@@ -33,6 +35,32 @@ import (
 //	}
 //
 func TestFS(fsys fs.FS, expected ...string) error {
+	if err := testFS(fsys, expected...); err != nil {
+		return err
+	}
+	for _, name := range expected {
+		if i := strings.Index(name, "/"); i >= 0 {
+			dir, dirSlash := name[:i], name[:i+1]
+			var subExpected []string
+			for _, name := range expected {
+				if strings.HasPrefix(name, dirSlash) {
+					subExpected = append(subExpected, name[len(dirSlash):])
+				}
+			}
+			sub, err := fs.Sub(fsys, dir)
+			if err != nil {
+				return err
+			}
+			if err := testFS(sub, subExpected...); err != nil {
+				return fmt.Errorf("testing fs.Sub(fsys, %s): %v", dir, err)
+			}
+			break // one sub-test is enough
+		}
+	}
+	return nil
+}
+
+func testFS(fsys fs.FS, expected ...string) error {
 	t := fsTester{fsys: fsys}
 	t.checkDir(".")
 	t.checkOpen(".")
@@ -42,6 +70,20 @@ func TestFS(fsys fs.FS, expected ...string) error {
 	}
 	for _, file := range t.files {
 		found[file] = true
+	}
+	delete(found, ".")
+	if len(expected) == 0 && len(found) > 0 {
+		var list []string
+		for k := range found {
+			if k != "." {
+				list = append(list, k)
+			}
+		}
+		sort.Strings(list)
+		if len(list) > 15 {
+			list = append(list[:10], "...")
+		}
+		t.errorf("expected empty file system but found files:\n%s", strings.Join(list, "\n"))
 	}
 	for _, name := range expected {
 		if !found[name] {
@@ -79,7 +121,7 @@ func (t *fsTester) openDir(dir string) fs.ReadDirFile {
 	d, ok := f.(fs.ReadDirFile)
 	if !ok {
 		f.Close()
-		t.errorf("%s: Open returned File type %T, not a io.ReadDirFile", dir, f)
+		t.errorf("%s: Open returned File type %T, not a fs.ReadDirFile", dir, f)
 		return nil
 	}
 	return d
@@ -260,7 +302,7 @@ func (t *fsTester) checkGlob(dir string, list []fs.DirEntry) {
 		for i, e := range elem {
 			var pattern []rune
 			for j, r := range e {
-				if r == '*' || r == '?' || r == '\\' || r == '[' {
+				if r == '*' || r == '?' || r == '\\' || r == '[' || r == '-' {
 					pattern = append(pattern, '\\', r)
 					continue
 				}
@@ -360,9 +402,10 @@ func (t *fsTester) checkStat(path string, entry fs.DirEntry) {
 		return
 	}
 	fentry := formatEntry(entry)
-	finfo := formatInfoEntry(info)
-	if fentry != finfo {
-		t.errorf("%s: mismatch:\n\tentry = %s\n\tfile.Stat() = %s", path, fentry, finfo)
+	fientry := formatInfoEntry(info)
+	// Note: mismatch here is OK for symlink, because Open dereferences symlink.
+	if fentry != fientry && entry.Type()&fs.ModeSymlink == 0 {
+		t.errorf("%s: mismatch:\n\tentry = %s\n\tfile.Stat() = %s", path, fentry, fientry)
 	}
 
 	einfo, err := entry.Info()
@@ -370,12 +413,22 @@ func (t *fsTester) checkStat(path string, entry fs.DirEntry) {
 		t.errorf("%s: entry.Info: %v", path, err)
 		return
 	}
-	fentry = formatInfo(einfo)
-	finfo = formatInfo(info)
-	if fentry != finfo {
-		t.errorf("%s: mismatch:\n\tentry.Info() = %s\n\tfile.Stat() = %s\n", path, fentry, finfo)
+	finfo := formatInfo(info)
+	if entry.Type()&fs.ModeSymlink != 0 {
+		// For symlink, just check that entry.Info matches entry on common fields.
+		// Open deferences symlink, so info itself may differ.
+		feentry := formatInfoEntry(einfo)
+		if fentry != feentry {
+			t.errorf("%s: mismatch\n\tentry = %s\n\tentry.Info() = %s\n", path, fentry, feentry)
+		}
+	} else {
+		feinfo := formatInfo(einfo)
+		if feinfo != finfo {
+			t.errorf("%s: mismatch:\n\tentry.Info() = %s\n\tfile.Stat() = %s\n", path, feinfo, finfo)
+		}
 	}
 
+	// Stat should be the same as Open+Stat, even for symlinks.
 	info2, err := fs.Stat(t.fsys, path)
 	if err != nil {
 		t.errorf("%s: fs.Stat: %v", path, err)
@@ -460,7 +513,7 @@ func (t *fsTester) checkFile(file string) {
 		return
 	}
 
-	data, err := ioutil.ReadAll(f)
+	data, err := io.ReadAll(f)
 	if err != nil {
 		f.Close()
 		t.errorf("%s: Open+ReadAll: %v", file, err)
@@ -483,6 +536,18 @@ func (t *fsTester) checkFile(file string) {
 			return
 		}
 		t.checkFileRead(file, "ReadAll vs fsys.ReadFile", data, data2)
+
+		// Modify the data and check it again. Modifying the
+		// returned byte slice should not affect the next call.
+		for i := range data2 {
+			data2[i]++
+		}
+		data2, err = fsys.ReadFile(file)
+		if err != nil {
+			t.errorf("%s: second call to fsys.ReadFile: %v", file, err)
+			return
+		}
+		t.checkFileRead(file, "Readall vs second fsys.ReadFile", data, data2)
 
 		t.checkBadPath(file, "ReadFile",
 			func(name string) error { _, err := fsys.ReadFile(name); return err })

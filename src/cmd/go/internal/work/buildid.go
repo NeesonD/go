@@ -7,9 +7,8 @@ package work
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	exec "internal/execabs"
 	"os"
-	"os/exec"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -205,7 +204,7 @@ func (b *Builder) toolID(name string) string {
 // In order to get reproducible builds for released compilers, we
 // detect a released compiler by the absence of "experimental" in the
 // --version output, and in that case we just use the version string.
-func (b *Builder) gccgoToolID(name, language string) (string, error) {
+func (b *Builder) gccToolID(name, language string) (string, error) {
 	key := name + "." + language
 	b.id.Lock()
 	id := b.toolIDCache[key]
@@ -344,7 +343,7 @@ func (b *Builder) gccgoBuildIDFile(a *Action) (string, error) {
 		}
 	}
 
-	if err := ioutil.WriteFile(sfile, buf.Bytes(), 0666); err != nil {
+	if err := os.WriteFile(sfile, buf.Bytes(), 0666); err != nil {
 		return "", err
 	}
 
@@ -647,7 +646,7 @@ func (b *Builder) updateBuildID(a *Action, target string, rewrite bool) error {
 	}
 
 	if rewrite {
-		w, err := os.OpenFile(target, os.O_WRONLY, 0)
+		w, err := os.OpenFile(target, os.O_RDWR, 0)
 		if err != nil {
 			return err
 		}

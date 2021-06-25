@@ -434,17 +434,29 @@ func TestReset(t *testing.T) {
 	t.Error(err)
 }
 
-// Test that sleeping for an interval so large it overflows does not
-// result in a short sleep duration.
+// Test that sleeping (via Sleep or Timer) for an interval so large it
+// overflows does not result in a short sleep duration. Nor does it interfere
+// with execution of other timers. If it does, timers in this or subsequent
+// tests may not fire.
 func TestOverflowSleep(t *testing.T) {
 	const big = Duration(int64(1<<63 - 1))
+
+	go func() {
+		Sleep(big)
+		// On failure, this may return after the test has completed, so
+		// we need to panic instead.
+		panic("big sleep returned")
+	}()
+
 	select {
 	case <-After(big):
 		t.Fatalf("big timeout fired")
 	case <-After(25 * Millisecond):
 		// OK
 	}
+
 	const neg = Duration(-1 << 63)
+	Sleep(neg) // Returns immediately.
 	select {
 	case <-After(neg):
 		// OK
@@ -473,13 +485,10 @@ func TestIssue5745(t *testing.T) {
 	t.Error("Should be unreachable.")
 }
 
-func TestOverflowRuntimeTimer(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping in short mode, see issue 6874")
-	}
+func TestOverflowPeriodRuntimeTimer(t *testing.T) {
 	// This may hang forever if timers are broken. See comment near
 	// the end of CheckRuntimeTimerOverflow in internal_test.go.
-	CheckRuntimeTimerOverflow()
+	CheckRuntimeTimerPeriodOverflow()
 }
 
 func checkZeroPanicString(t *testing.T) {
@@ -500,6 +509,22 @@ func TestZeroTimerStopPanics(t *testing.T) {
 	defer checkZeroPanicString(t)
 	var tr Timer
 	tr.Stop()
+}
+
+// Test that zero duration timers aren't missed by the scheduler. Regression test for issue 44868.
+func TestZeroTimer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short")
+	}
+
+	for i := 0; i < 1000000; i++ {
+		s := Now()
+		ti := NewTimer(0)
+		<-ti.C
+		if diff := Since(s); diff > 2*Second {
+			t.Errorf("Expected time to get value from Timer channel in less than 2 sec, took %v", diff)
+		}
+	}
 }
 
 // Benchmark timer latency when the thread that creates the timer is busy with

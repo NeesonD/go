@@ -12,7 +12,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"mime/multipart"
 	. "net/http"
@@ -33,9 +32,26 @@ func TestQuery(t *testing.T) {
 	}
 }
 
+// Issue #25192: Test that ParseForm fails but still parses the form when an URL
+// containing a semicolon is provided.
+func TestParseFormSemicolonSeparator(t *testing.T) {
+	for _, method := range []string{"POST", "PATCH", "PUT", "GET"} {
+		req, _ := NewRequest(method, "http://www.google.com/search?q=foo;q=bar&a=1",
+			strings.NewReader("q"))
+		err := req.ParseForm()
+		if err == nil {
+			t.Fatalf(`for method %s, ParseForm expected an error, got success`, method)
+		}
+		wantForm := url.Values{"a": []string{"1"}}
+		if !reflect.DeepEqual(req.Form, wantForm) {
+			t.Fatalf("for method %s, ParseForm expected req.Form = %v, want %v", method, req.Form, wantForm)
+		}
+	}
+}
+
 func TestParseFormQuery(t *testing.T) {
 	req, _ := NewRequest("POST", "http://www.google.com/search?q=foo&q=bar&both=x&prio=1&orphan=nope&empty=not",
-		strings.NewReader("z=post&both=y&prio=2&=nokey&orphan;empty=&"))
+		strings.NewReader("z=post&both=y&prio=2&=nokey&orphan&empty=&"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; param=value")
 
 	if q := req.FormValue("q"); q != "foo" {
@@ -246,6 +262,29 @@ func TestParseMultipartForm(t *testing.T) {
 	}
 }
 
+// Issue 45789: multipart form should not include directory path in filename
+func TestParseMultipartFormFilename(t *testing.T) {
+	postData :=
+		`--xxx
+Content-Disposition: form-data; name="file"; filename="../usr/foobar.txt/"
+Content-Type: text/plain
+
+--xxx--
+`
+	req := &Request{
+		Method: "POST",
+		Header: Header{"Content-Type": {`multipart/form-data; boundary=xxx`}},
+		Body:   io.NopCloser(strings.NewReader(postData)),
+	}
+	_, hdr, err := req.FormFile("file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr.Filename != "foobar.txt" {
+		t.Errorf("expected only the last element of the path, got %q", hdr.Filename)
+	}
+}
+
 // Issue #40430: Test that if maxMemory for ParseMultipartForm when combined with
 // the payload size and the internal leeway buffer size of 10MiB overflows, that we
 // correctly return an error.
@@ -285,7 +324,7 @@ func TestMaxInt64ForMultipartFormMaxMemoryOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if g, w := res.StatusCode, StatusBadRequest; g != w {
+	if g, w := res.StatusCode, StatusOK; g != w {
 		t.Fatalf("Status code mismatch: got %d, want %d", g, w)
 	}
 }
@@ -340,6 +379,18 @@ func TestMultipartRequest(t *testing.T) {
 	if err := req.ParseMultipartForm(25); err != nil {
 		t.Fatal("ParseMultipartForm second call:", err)
 	}
+	validateTestMultipartContents(t, req, false)
+}
+
+// Issue #25192: Test that ParseMultipartForm fails but still parses the
+// multi-part form when an URL containing a semicolon is provided.
+func TestParseMultipartFormSemicolonSeparator(t *testing.T) {
+	req := newTestMultipartRequest(t)
+	req.URL = &url.URL{RawQuery: "q=foo;q=bar"}
+	if err := req.ParseMultipartForm(25); err == nil {
+		t.Fatal("ParseMultipartForm expected error due to invalid semicolon, got nil")
+	}
+	defer req.MultipartForm.RemoveAll()
 	validateTestMultipartContents(t, req, false)
 }
 
@@ -469,6 +520,10 @@ var readRequestErrorTests = []struct {
 	10: {
 		in:     "HEAD / HTTP/1.1\r\nContent-Length:0\r\nContent-Length: 0\r\n\r\n",
 		header: Header{"Content-Length": {"0"}},
+	},
+	11: {
+		in:  "HEAD / HTTP/1.1\r\nHost: foo\r\nHost: bar\r\n\r\n\r\n\r\n",
+		err: "too many Host headers",
 	},
 }
 
@@ -851,6 +906,92 @@ func TestMaxBytesReaderStickyError(t *testing.T) {
 	}
 }
 
+// Issue 45101: maxBytesReader's Read panicked when n < -1. This test
+// also ensures that Read treats negative limits as equivalent to 0.
+func TestMaxBytesReaderDifferentLimits(t *testing.T) {
+	const testStr = "1234"
+	tests := [...]struct {
+		limit   int64
+		lenP    int
+		wantN   int
+		wantErr bool
+	}{
+		0: {
+			limit:   -123,
+			lenP:    0,
+			wantN:   0,
+			wantErr: false, // Ensure we won't return an error when the limit is negative, but we don't need to read.
+		},
+		1: {
+			limit:   -100,
+			lenP:    32 * 1024,
+			wantN:   0,
+			wantErr: true,
+		},
+		2: {
+			limit:   -2,
+			lenP:    1,
+			wantN:   0,
+			wantErr: true,
+		},
+		3: {
+			limit:   -1,
+			lenP:    2,
+			wantN:   0,
+			wantErr: true,
+		},
+		4: {
+			limit:   0,
+			lenP:    3,
+			wantN:   0,
+			wantErr: true,
+		},
+		5: {
+			limit:   1,
+			lenP:    4,
+			wantN:   1,
+			wantErr: true,
+		},
+		6: {
+			limit:   2,
+			lenP:    5,
+			wantN:   2,
+			wantErr: true,
+		},
+		7: {
+			limit:   3,
+			lenP:    2,
+			wantN:   2,
+			wantErr: false,
+		},
+		8: {
+			limit:   int64(len(testStr)),
+			lenP:    len(testStr),
+			wantN:   len(testStr),
+			wantErr: false,
+		},
+		9: {
+			limit:   100,
+			lenP:    6,
+			wantN:   len(testStr),
+			wantErr: false,
+		},
+	}
+	for i, tt := range tests {
+		rc := MaxBytesReader(nil, io.NopCloser(strings.NewReader(testStr)), tt.limit)
+
+		n, err := rc.Read(make([]byte, tt.lenP))
+
+		if n != tt.wantN {
+			t.Errorf("%d. n: %d, want n: %d", i, n, tt.wantN)
+		}
+
+		if (err != nil) != tt.wantErr {
+			t.Errorf("%d. error: %v", i, err)
+		}
+	}
+}
+
 func TestWithContextDeepCopiesURL(t *testing.T) {
 	req, err := NewRequest("POST", "https://golang.org/", nil)
 	if err != nil {
@@ -1164,7 +1305,7 @@ func BenchmarkFileAndServer_64MB(b *testing.B) {
 }
 
 func benchmarkFileAndServer(b *testing.B, n int64) {
-	f, err := ioutil.TempFile(os.TempDir(), "go-bench-http-file-and-server")
+	f, err := os.CreateTemp(os.TempDir(), "go-bench-http-file-and-server")
 	if err != nil {
 		b.Fatalf("Failed to create temp file: %v", err)
 	}
